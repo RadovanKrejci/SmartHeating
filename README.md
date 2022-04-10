@@ -3,14 +3,17 @@ Smart control of fireplace stove and electric heater combined in one house.
 
 # Main features are:
   ## Safety 
-    Should the water from fireplace be too hot it turns on the pump to cool it down and if it reaches critical threshold an alarm turns on
+    Should the water from fireplace be too hot it turns on the pump to cool it down. 
+    If it reaches critical threshold an alarm turns on
   ## Thermostat 
     Turns heater on / off as needed to combine the power with fireplace stove and raeach preset temperature.
     Thermostat uses two different sensors for two different scenarios
-    1. Winter / antifreeze - sensor that is placed close to plumbing is used to maintain low temperature but avoid the water to freeze (5 degrees)
+    1. Winter / antifreeze - sensor that is placed close to plumbing is used to maintain low temperature\
+    but avoid the water to freeze (5 degrees)
     2. Normal / Summer - sensor placed in the main room is used to maintaing comfortable temperature (e.g. 22 degrees)
   ## Other 
-     1. the pump as well as main heater are turned on / off with preset delays to avoid their damage in case of frequent switches.
+     1. the pump as well as main heater are turned on / off with preset delays to avoid their damage
+     in case of frequent switches.
      2. the entire system can easily be configured and status checked in 2x16 display
      3. some other small things. 
   ## Language:

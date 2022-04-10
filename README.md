@@ -10,10 +10,12 @@ Smart control of fireplace stove and electric heater combined in one house.
     1. Winter / antifreeze - sensor that is placed close to plumbing is used to maintain low temperature but avoid the water to freeze (5 degrees)
     2. Normal / Summer - sensor placed in the main room is used to maintaing comfortable temperature (e.g. 22 degrees)
   ## Other 
-     - the pump as well as main heater are turned on / off with preset delays to avoid their damage in case of frequent switches.
-     - the entire system can easily be configured and status checked in 2x16 display
-     - some other small things. 
-  ## Language: menu items are in czech. 
+     1. the pump as well as main heater are turned on / off with preset delays to avoid their damage in case of frequent switches.
+     2. the entire system can easily be configured and status checked in 2x16 display
+     3. some other small things. 
+  ## Language:
+    - Menu items are in czech. 
+    - Can easily be translated.
   
  # HW Components used: 
   - Arduino UNO

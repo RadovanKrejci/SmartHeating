@@ -27,6 +27,7 @@ Smart control of fireplace stove and electric heater combined in one house.
   - 2x DHT22 thermometer, measures room temperature (winter close to plumbing, normal in the main room)
   - 1602 LCD Keypad Shield
   - 2 channel relay module 5VDC 250VAC 10A
+  - 10k and 4.7k resistors
   - Cables, Connectors, Plastic box etc.
  
  

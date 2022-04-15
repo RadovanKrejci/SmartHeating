@@ -14,7 +14,7 @@ Smart control of fireplace stove and electric heater combined in one house.
   ## Other 
      1. the pump as well as main heater are turned on / off with preset delays to avoid their damage
      in case of frequent switches.
-     2. the entire system can easily be configured and status checked in 2x16 display
+     2. the entire system can easily be configured and status checked on 2x16 display
      3. some other small things. 
   ## Language:
     - Menu items are in czech. 

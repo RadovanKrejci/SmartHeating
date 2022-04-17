@@ -8,9 +8,17 @@
   3) Other 
       - the pump as well as main heater are turned on / off with preset delays to avoid their damage in case of frequent switches.
       - the entire system can easily be configured and status checked in 2x16 display
-      - some other small things. 
+      - the electric heater does not turn on if the input water temperature is higher then 90% of the preset output temperature of the electric heater.
+      - some other small things.
   Language: menu items are in czech. 
 */
+
+/*
+TODO
+1) in case any sensor malfunctions do something (what?)
+2) add remote control over WiFi
+*/
+
 #include <LiquidCrystal.h>
 //#include <OneWire.h> // zakomentovano abych na pinech A4,A5 nemel I2C SDA a SCL protokol a mohl to pouzit pro relatka
 #include <DallasTemperature.h>
@@ -18,12 +26,36 @@
 #include <EEPROM.h>
 #include "Menu.h"
 
-#define VERSION 3 //  increasing the version number will force the replacement of EEPROM content by the defaults
+#define VERSION 4 //  increasing the version number will force the replacement of EEPROM content by the defaults
 #define VPOSITION 512 // position in EEPROM to store version number. Must be higher then SETTINGSMENUSIZE 
 
 enum menu_type {
   MAIN_MENU,
   SETTINGS_MENU
+};
+
+enum MainMenuItem {
+  ACTROOM1TEMP = 0,
+  ACTROOM1HUM,
+  ACTROOM2TEMP,
+  ACTROOM2HUM,
+  ACTWATEROUTTEMP,
+  ACTWATERINTEMP, 
+  PUMPON,
+  ELHEATERON,
+  SETTINGS,
+  MAINMENUSIZE
+};
+item_t MAINMENU[MAINMENUSIZE] = {
+  {"Patro Teplota   ", 0, 0, 0, 0, " \xDF""C"},
+  {"Patro Vlhkost   ", 0, 0, 0, 0, " %"},
+  {"Prizemi Teplota ", 0, 0, 0, 0, " \xDF""C"},
+  {"Prizemi Vlhkost ", 0, 0, 0, 0, " %"},
+  {"T vystupni vody ", 0, 0, 0, 0, " \xDF""C"},
+  {"T vstupni  vody ", 0, 0, 0, 0, " \xDF""C"},
+  {"Cerpadlo        ", AUTO, 0, 0, 0, ""},
+  {"Kotel           ", AUTO, 0, 0, 0, ""},
+  {"Nastaveni -> Sel", BLANK, 0, 0, 0, ""}
 };
 
 enum SettingMenuItem {
@@ -34,6 +66,7 @@ enum SettingMenuItem {
   SETELHEATER,
   SETPUMP,
   SETHYSTER,
+  SETWATERHEATER,
   BACK,
   SETTINGSMENUSIZE
 };
@@ -48,31 +81,8 @@ item_t SETTINGSMENU[SETTINGSMENUSIZE] =  {
   {"Provoz Kotle    ", DEFAULT_HEATER, 1, AUTO, OFF, ""},
   {"Provoz Cerpadla ", DEFAULT_PUMP, 1, AUTO, OFF, ""},
   {"Hystereze       ", DEFAULT_HYSTEREZE, TEMPSTEP, 300, MINTEMP, " \xDF""C"},
+  {"T Vody z Kotle  ", DEFAULT_HEATERW, TEMPSTEP, 80000, 40000, " \xDF""C"},  // Preset output temperature of the electric heater. 
   {"Zpet <- Sel     ", BLANK, 0, 0, 0, ""}
-};
-
-enum MainMenuItem {
-  ACTROOM1TEMP = 0,
-  ACTROOM1HUM,
-  ACTROOM2TEMP,
-  ACTROOM2HUM,
-  ACTWATER1TEMP,
-  ACTWATER2TEMP, 
-  PUMPON,
-  ELHEATERON,
-  SETTINGS,
-  MAINMENUSIZE
-};
-item_t MAINMENU[MAINMENUSIZE] = {
-  {"Patro Teplota   ", 0, 0, 0, 0, " \xDF""C"},
-  {"Patro Vlhkost   ", 0, 0, 0, 0, " %"},
-  {"Prizemi Teplota ", 0, 0, 0, 0, " \xDF""C"},
-  {"Prizemi Vlhkost ", 0, 0, 0, 0, " %"},
-  {"T vystupni voda ", 0, 0, 0, 0, " \xDF""C"},
-  {"T vstupni  voda ", 0, 0, 0, 0, " \xDF""C"},
-  {"Cerpadlo        ", AUTO, 0, 0, 0, ""},
-  {"Kotel           ", AUTO, 0, 0, 0, ""},
-  {"Nastaveni -> Sel", BLANK, 0, 0, 0, ""}
 };
 
 //LCD pin to Arduino
@@ -101,11 +111,13 @@ const int pin_WP = 18;  // Water pump pin relay
 const int pin_H = 19;   // Heater pin relay
 
 // Default values for the conrol functions
-const unsigned long DEFAULT_HONOFFTIME = 900000;    // Heater can't be turned on earlier than 15 mins after last turn off.
+const unsigned long DEFAULT_HONOFFTIME = 600000;    // Heater can't be turned on earlier than 10 mins after last turn off.
 //const int DEFAULT_HONOFFTIME = 20000;   // test 20 sec. only
-const unsigned long DEFAULT_WPONOFFTIME = 1800000;  // Once the pump is turned on it will run for at least 30 minutes. 
+const unsigned long DEFAULT_WPONOFFTIME = 600000;  // Once the pump is turned on it will run for at least 10 minutes. 
 //const int DEFAULT_WPONOFFTIME = 20000;  // test 20 sec. only
 const int DEFAULT_WTPUMP = 4500;          // When water temp is higher than 45 degrees, the water pump turns on
+const int BACKGLIGHTTIME = 20000;         // Turn off display backlight after 20s.
+const float CUTOFFHEATER = 0.95;          // If the input water into heater is 95% of output don't turn heater on. Keep it off
 
 // Setup a oneWire instance to communicate with any OneWire devices
 OneWire oneWire(pin_WTS);
@@ -146,13 +158,6 @@ void setup() {
   ReadEEPROM();
 }
 
-void loop() {
-  read_sensors();
-  int key = read_key();
-  run_menu(key);
-  control_system();
-}
-
 // Timer class is used to implement delays in some operations. 
 class MyTimer {
   private:
@@ -182,32 +187,47 @@ class MyTimer {
     }
 };
 
+void loop() {
+  static MyTimer T(BACKGLIGHTTIME, true); // timer to control display backlight. It turns off after BACKGLIGHTTIME seconds. 
+
+  read_sensors();
+  int key = read_key();
+  // manage display backlight
+  if (key != NONE) {
+    pinMode(pin_BL, INPUT);
+    T.start_timer();
+  }
+  else if (T.expired()) {
+    pinMode(pin_BL, OUTPUT);
+    digitalWrite(pin_BL, LOW);
+  }
+
+  // manage rest 
+  run_menu(key);
+  control_system();
+}
+
 // Heater class is used to provide persistence that allows delays between switch on and off. 
 class MyHeater {
   private:
-    MyTimer T; // can't be turned on earlier than 15 mins after turn off.
+    MyTimer T; // can't be turned on earlier than X mins after turn off.
     bool off;
 
   public:
     MyHeater() : T(DEFAULT_HONOFFTIME) {
-      off = true;
     }
 
     void heater_on() {
       if (T.expired()) { 
         digitalWrite(pin_H, LOW);
-        main_menu.value_set(ELHEATERON, ON);
-        off = false;        
+        main_menu.value_set(ELHEATERON, ON);        
       }
     }
 
     void heater_off() {
-      if (!off) {
         digitalWrite(pin_H, HIGH);
         main_menu.value_set(ELHEATERON, OFF);
         T.start_timer();
-        off = true;
-      }
     }
 };
 
@@ -353,15 +373,15 @@ void read_sensors() {
     sensors.requestTemperatures();
     float Water1T = sensors.getTempCByIndex(1); // index to be tried and set when sensor changes
     if (Water1T != DEVICE_DISCONNECTED_C)
-      main_menu.value_set(ACTWATER1TEMP, (int)(100 * Water1T));
+      main_menu.value_set(ACTWATEROUTTEMP, (int)(100 * Water1T));
     else
-      main_menu.value_set(ACTWATER1TEMP, ERROR);  // Error value
+      main_menu.value_set(ACTWATEROUTTEMP, ERROR);  // Error value
     // Read water 2 temperature
     float Water2T = sensors.getTempCByIndex(0); // index to be tried and set when sensor changes
     if (Water2T != DEVICE_DISCONNECTED_C)
-      main_menu.value_set(ACTWATER2TEMP, (int)(100 * Water2T));
+      main_menu.value_set(ACTWATERINTEMP, (int)(100 * Water2T));
     else
-      main_menu.value_set(ACTWATER2TEMP,  ERROR);  // Error value
+      main_menu.value_set(ACTWATERINTEMP,  ERROR);  // Error value
 
     // Read Rooms temperature and humidity
     float Room1H = dht1.readHumidity();
@@ -393,14 +413,17 @@ void read_sensors() {
 void control_system() {
   static MyHeater HT;
   static MyPump P;
-  float hystereze = settings_menu.value_get(SETHYSTER);  //  up and down difference. Mozna by melo byt ve stupnich, nikoliv procentech.
+  int hystereze = settings_menu.value_get(SETHYSTER);  //  up and down difference. Mozna by melo byt ve stupnich, nikoliv procentech.
+  int t; 
 
   // Any water temp > Max water temp => run Alarm, else stop Alarm. This is to avoid boiling the water out of stove. 
-  int t = max(main_menu.value_get(ACTWATER1TEMP),main_menu.value_get(ACTWATER2TEMP));
-  if (t >= settings_menu.value_get(SETMAXWATERTEMP))
-    start_alarm();
-  else if (main_menu.value_get(ACTWATER1TEMP) < settings_menu.value_get(SETMAXWATERTEMP))
-    stop_alarm();
+  t = max(main_menu.value_get(ACTWATEROUTTEMP),main_menu.value_get(ACTWATERINTEMP));
+  if (t != ERROR) {
+    if (t >= settings_menu.value_get(SETMAXWATERTEMP))
+      start_alarm();
+    else if (main_menu.value_get(ACTWATEROUTTEMP) < settings_menu.value_get(SETMAXWATERTEMP))
+      stop_alarm();
+  }
   
   // Electric Heater ON, OFF, or AUTO. If Auto then thermostat is on, i.e. Room temp to match preset temp.
   // Master sensor is either ROOM #1 or ROOM #2 (with plumbing that must not freeze). Depending on master, either preset #1 or #2 is used as required temperature. 
@@ -418,10 +441,17 @@ void control_system() {
       HT.heater_off();
       break;
     case AUTO:
-      if (main_menu.value_get(master_sensor) > settings_menu.value_get(master_temp) + hystereze)
+      t = main_menu.value_get(master_sensor);
+      if (t != ERROR) {
+        if (t > settings_menu.value_get(master_temp) + hystereze ||
+          main_menu.value_get(ACTWATERINTEMP) > CUTOFFHEATER * settings_menu.value_get(SETWATERHEATER))
         HT.heater_off();
-      else if (main_menu.value_get(master_sensor) < settings_menu.value_get(master_temp) - hystereze)
-        HT.heater_on();
+      else if (t < settings_menu.value_get(master_temp) - hystereze &&
+               main_menu.value_get(ACTWATERINTEMP) <= CUTOFFHEATER * settings_menu.value_get(SETWATERHEATER))
+        HT.heater_on();          
+      }     
+      else
+        HT.heater_off(); // if sensors do not work, fail back and turn off the electric heater
   }
   // Electric Pump ON, OFF, or AUTO. If Auto then pump is on if water temperature is higher then threshold. 
   switch (settings_menu.value_get(SETPUMP)) {
@@ -433,9 +463,14 @@ void control_system() {
       break;
     case AUTO:
       // Turn on pump if water is over preset temp.
-      if (main_menu.value_get(ACTWATER1TEMP) > DEFAULT_WTPUMP)
-        P.pump_on();
+      t = main_menu.value_get(ACTWATEROUTTEMP);
+      if (t != ERROR) {
+        if (main_menu.value_get(ACTWATEROUTTEMP) > DEFAULT_WTPUMP)
+          P.pump_on();
+        else
+          P.pump_off();
+      }
       else
-        P.pump_off();
+        P.pump_on();  // if sensors fail, fail back to turning on the pump (dont know what temperature the water has)
   }
 }

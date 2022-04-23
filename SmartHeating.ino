@@ -26,8 +26,9 @@ TODO
 #include <EEPROM.h>
 #include "Menu.h"
 
-#define VERSION 4 //  increasing the version number will force the replacement of EEPROM content by the defaults
+#define VERSION 5 //  increasing the version number will force the replacement of EEPROM content by the defaults
 #define VPOSITION 512 // position in EEPROM to store version number. Must be higher then SETTINGSMENUSIZE 
+//#define DEBUG // uncomment for debugging without the use of sensors. The values are then set in main menu using the keyboard
 
 enum menu_type {
   MAIN_MENU,
@@ -41,18 +42,18 @@ enum MainMenuItem {
   ACTROOM2HUM,
   ACTWATEROUTTEMP,
   ACTWATERINTEMP, 
-  PUMPON,
-  ELHEATERON,
+  ACTPUMPON,
+  ACTELHEATERON,
   SETTINGS,
   MAINMENUSIZE
 };
 item_t MAINMENU[MAINMENUSIZE] = {
-  {"Patro Teplota   ", 0, 0, 0, 0, " \xDF""C"},
+  {"Patro Teplota   ", 0, 50, 10000, 0, " \xDF""C"},
   {"Patro Vlhkost   ", 0, 0, 0, 0, " %"},
-  {"Prizemi Teplota ", 0, 0, 0, 0, " \xDF""C"},
+  {"Prizemi Teplota ", 0, 50, 10000, 0, " \xDF""C"},
   {"Prizemi Vlhkost ", 0, 0, 0, 0, " %"},
-  {"T vystupni vody ", 0, 0, 0, 0, " \xDF""C"},
-  {"T vstupni  vody ", 0, 0, 0, 0, " \xDF""C"},
+  {"T vystupni vody ", 0, 50, 10000, 0, " \xDF""C"},
+  {"T vstupni  vody ", 0, 50, 10000, 0, " \xDF""C"},
   {"Cerpadlo        ", AUTO, 0, 0, 0, ""},
   {"Kotel           ", AUTO, 0, 0, 0, ""},
   {"Nastaveni -> Sel", BLANK, 0, 0, 0, ""}
@@ -66,7 +67,7 @@ enum SettingMenuItem {
   SETELHEATER,
   SETPUMP,
   SETHYSTER,
-  SETWATERHEATER,
+  SETWATEROUTHEATER,
   BACK,
   SETTINGSMENUSIZE
 };
@@ -81,7 +82,7 @@ item_t SETTINGSMENU[SETTINGSMENUSIZE] =  {
   {"Provoz Kotle    ", DEFAULT_HEATER, 1, AUTO, OFF, ""},
   {"Provoz Cerpadla ", DEFAULT_PUMP, 1, AUTO, OFF, ""},
   {"Hystereze       ", DEFAULT_HYSTEREZE, TEMPSTEP, 300, MINTEMP, " \xDF""C"},
-  {"T Vody z Kotle  ", DEFAULT_HEATERW, TEMPSTEP, 80000, 40000, " \xDF""C"},  // Preset output temperature of the electric heater. 
+  {"T Vody z Kotle  ", DEFAULT_HEATEROUTWATER, TEMPSTEP, 80000, 40000, " \xDF""C"},  // Preset output temperature of the electric heater. 
   {"Zpet <- Sel     ", BLANK, 0, 0, 0, ""}
 };
 
@@ -111,10 +112,14 @@ const int pin_WP = 18;  // Water pump pin relay
 const int pin_H = 19;   // Heater pin relay
 
 // Default values for the conrol functions
+#ifdef DEBUG
+const int DEFAULT_HONOFFTIME = 10000;   // test 10 sec. only
+const int DEFAULT_WPONOFFTIME = 10000;  // test 10 sec. only
+#else
 const unsigned long DEFAULT_HONOFFTIME = 600000;    // Heater can't be turned on earlier than 10 mins after last turn off.
-//const int DEFAULT_HONOFFTIME = 20000;   // test 20 sec. only
-const unsigned long DEFAULT_WPONOFFTIME = 600000;  // Once the pump is turned on it will run for at least 10 minutes. 
-//const int DEFAULT_WPONOFFTIME = 20000;  // test 20 sec. only
+const unsigned long DEFAULT_WPONOFFTIME = 1200000;  // Once the pump is turned on it will run for at least 20 minutes. 
+#endif
+
 const int DEFAULT_WTPUMP = 4500;          // When water temp is higher than 45 degrees, the water pump turns on
 const int BACKGLIGHTTIME = 20000;         // Turn off display backlight after 20s.
 const float CUTOFFHEATER = 0.95;          // If the input water into heater is 95% of output don't turn heater on. Keep it off
@@ -215,19 +220,24 @@ class MyHeater {
 
   public:
     MyHeater() : T(DEFAULT_HONOFFTIME) {
+      off = true;
     }
 
     void heater_on() {
       if (T.expired()) { 
         digitalWrite(pin_H, LOW);
-        main_menu.value_set(ELHEATERON, ON);        
+        main_menu.value_set(ACTELHEATERON, ON);  
+        off = false;      
       }
     }
 
     void heater_off() {
+      if (!off) {
         digitalWrite(pin_H, HIGH);
-        main_menu.value_set(ELHEATERON, OFF);
+        main_menu.value_set(ACTELHEATERON, OFF);
         T.start_timer();
+        off = true;
+       }
     }
 };
 
@@ -242,14 +252,14 @@ class MyPump {
     
     void pump_on() {
       digitalWrite(pin_WP, LOW);
-      main_menu.value_set(PUMPON, ON);
+      main_menu.value_set(ACTPUMPON, ON);
       T.start_timer();
     }
 
     void pump_off() {
       if (T.expired()) {
         digitalWrite(pin_WP, HIGH);
-        main_menu.value_set(PUMPON, OFF);
+        main_menu.value_set(ACTPUMPON, OFF);
       }
     }
 };
@@ -330,6 +340,29 @@ void run_menu(int key) {
   
   if (menu_type == MAIN_MENU) {
     display_2lines(main_menu.text_get(), main_menu.value_getastext());
+#ifdef DEBUG
+  switch (key) {
+    case DOWN:
+      main_menu.next();
+      break;
+    case UP:
+      main_menu.prev();
+      break;
+    case LEFT:
+      if (!main_menu.last()) // selecting last menu item of configuration menu means going back to main menu
+        main_menu.value_decrease(); 
+      break;  
+    case RIGHT:
+      if (!main_menu.last()) 
+        main_menu.value_increase();
+      break;  
+    case SELECT:
+      if (main_menu.last()) {
+        menu_type = SETTINGS_MENU;
+        main_menu.beginning();
+      }
+  }
+#else
     if (key == DOWN || key == RIGHT)
       main_menu.next();
     else if (key == UP || key == LEFT)
@@ -338,6 +371,7 @@ void run_menu(int key) {
       menu_type = SETTINGS_MENU;
       main_menu.beginning();
     }
+#endif
   } else if (menu_type == SETTINGS_MENU) {
     display_2lines(settings_menu.text_get(), settings_menu.value_getastext());
     switch (key) {
@@ -356,14 +390,27 @@ void run_menu(int key) {
           settings_menu.value_increase();
         break;  
       case SELECT:
-        menu_type = MAIN_MENU;
-        settings_menu.beginning();
-        WriteEEPROM();
+        if (settings_menu.last()) {
+          menu_type = MAIN_MENU;
+          settings_menu.beginning();
+          WriteEEPROM();
+        }
     }
   }
 }
 
 void read_sensors() {
+#ifdef DEBUG
+  static bool firsttime = true;
+
+  if (firsttime) {
+    main_menu.value_set(ACTROOM1TEMP, DEFAULT_ROOM1_TEMP - 20);
+    main_menu.value_set(ACTROOM2TEMP, DEFAULT_ROOM2_TEMP - 20);
+    main_menu.value_set(ACTWATEROUTTEMP, DEFAULT_WTPUMP - 100);
+    main_menu.value_set(ACTWATERINTEMP, DEFAULT_WTPUMP - 100);    
+    firsttime = false;
+  }
+#else
   // read water temperature and room temperature every 1 second
   static MyTimer T(1000, true);  // create a timer for 1 second and start it immediately
   
@@ -386,28 +433,33 @@ void read_sensors() {
     // Read Rooms temperature and humidity
     float Room1H = dht1.readHumidity();
     float Room1T = dht1.readTemperature();
-    if (isnan(Room1T))
-      main_menu.value_set(ACTROOM1TEMP, ERROR);  // Error value
+    if (isnan(Room1T)) {
+      main_menu.value_set(ACTROOM1TEMP, ERROR);  // Error value 
+      dht1.begin(); // try to reset the sensor to succeed next time
+    }
     else
       main_menu.value_set(ACTROOM1TEMP, (int)(100 * Room1T));
-    if (isnan(Room1H))
+    if (isnan(Room1H)) {
       main_menu.value_set(ACTROOM1HUM, ERROR);  // Error value
+      dht1.begin(); // try to reset the sensor to succeed next time
+    }
     else
       main_menu.value_set(ACTROOM1HUM, (int)(100 * Room1H));
     
     float Room2H = dht2.readHumidity();
     float Room2T = dht2.readTemperature();
-    if (isnan(Room2T))
+    if (isnan(Room2T)) 
       main_menu.value_set(ACTROOM2TEMP, ERROR);  // Error value
     else
       main_menu.value_set(ACTROOM2TEMP, (int)(100 * Room2T));
-    if (isnan(Room2H))
+    if (isnan(Room2H)) 
       main_menu.value_set(ACTROOM2HUM, ERROR);  // Error value
     else
       main_menu.value_set(ACTROOM2HUM, (int)(100 * Room2H));
 
     T.start_timer();  // start the timer again
   }
+#endif
 }
 
 void control_system() {
@@ -443,11 +495,10 @@ void control_system() {
     case AUTO:
       t = main_menu.value_get(master_sensor);
       if (t != ERROR) {
-        if (t > settings_menu.value_get(master_temp) + hystereze ||
-          main_menu.value_get(ACTWATERINTEMP) > CUTOFFHEATER * settings_menu.value_get(SETWATERHEATER))
+        if (t >= settings_menu.value_get(master_temp) + hystereze ||
+            main_menu.value_get(ACTWATEROUTTEMP) >= settings_menu.value_get(SETWATEROUTHEATER))
         HT.heater_off();
-      else if (t < settings_menu.value_get(master_temp) - hystereze &&
-               main_menu.value_get(ACTWATERINTEMP) <= CUTOFFHEATER * settings_menu.value_get(SETWATERHEATER))
+      else if (t < settings_menu.value_get(master_temp) - hystereze)
         HT.heater_on();          
       }     
       else

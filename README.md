@@ -16,6 +16,7 @@ Smart control of fireplace stove and electric heater combined in one house.
      in case of frequent switches.
      2. the entire system can easily be configured and status checked on 2x16 display
      3. some other small things. 
+     4. in DEBUG mode the sensors are not read and temperature values are set on the keyboard instead
   ## Language:
     - Menu items are in czech. 
     - Can easily be translated.

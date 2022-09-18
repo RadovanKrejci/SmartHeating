@@ -22,14 +22,14 @@ enum MenuValues {
 };
 
 // default menu settings (other program defaults are in the main file)
-#define DEFAULT_ROOM1_TEMP 2200      // 22 st. celsia
+#define DEFAULT_ROOM1_TEMP 2100      // 22 st. celsia
 #define DEFAULT_ROOM2_TEMP 500       // 5 st. celsia - non freeze 
 #define DEFAULT_MAX_WATER_TEMP 8500  // 85 st. celsia
 #define DEFAULT_HEATER AUTO          // termostat on Auto 
 #define DEFAULT_PUMP AUTO            // pump on Auto
-#define DEFAULT_HYSTEREZE 50         // half degree
+#define DEFAULT_HYSTEREZE 30         // 0.3 degree
 #define TEMPSTEP 10                  // change temperature by 1/10 of degree
-#define DEFAULT_HEATERW 5500         // // Preset output temperature of the electric heater
+#define DEFAULT_HEATEROUTWATER 6000  // Preset max output temperature of when the electric heater turns off.
 
 typedef struct item {
     String text; 

@@ -1,3 +1,11 @@
+/*
+TODO
+1) in case any sensor malfunctions do something (what?)
+2) test remote control over WiFi
+3) Odstranit pipani na zacatku, nacist nejake realne hodnoty, jinak nez ctenim sensoru)
+4) nekde memory leak kazi menu settings
+*/
+
 /* Smart control of fireplace stove and regular heater in one house. 
  Main features are:
   1) Safety - should the water from fireplace be too hot it turns on the pump to cool it down and if it reaches critical threshold an alarm turns on
@@ -8,25 +16,22 @@
   3) Other 
       - the pump as well as main heater are turned on / off with preset delays to avoid their damage in case of frequent switches.
       - the entire system can easily be configured and status checked in 2x16 display
-      - the electric heater does not turn on if the input water temperature is higher then 90% of the preset output temperature of the electric heater.
+      - the electric heater does not turn on if the stove output water temperature is higher then the preset output temperature of the electric heater.
       - some other small things.
   Language: menu items are in czech. 
 */
 
-/*
-TODO
-1) in case any sensor malfunctions do something (what?)
-2) add remote control over WiFi
-*/
 
+#include <Arduino.h>
 #include <LiquidCrystal.h>
 //#include <OneWire.h> // zakomentovano abych na pinech A4,A5 nemel I2C SDA a SCL protokol a mohl to pouzit pro relatka
 #include <DallasTemperature.h>
 #include <DHT.h>
 #include <EEPROM.h>
 #include "Menu.h"
+#include "MySerial.h"
 
-#define VERSION 5 //  increasing the version number will force the replacement of EEPROM content by the defaults
+#define VERSION 6 //  increasing the version number will force the replacement of EEPROM content by the defaults. Do it when changing the configuration set.
 #define VPOSITION 512 // position in EEPROM to store version number. Must be higher then SETTINGSMENUSIZE 
 //#define DEBUG // uncomment for debugging without the use of sensors. The values are then set in main menu using the keyboard
 
@@ -47,7 +52,7 @@ enum MainMenuItem {
   SETTINGS,
   MAINMENUSIZE
 };
-item_t MAINMENU[MAINMENUSIZE] = {
+item_t MAINMENU[] = {
   {"Patro Teplota   ", 0, 50, 10000, 0, " \xDF""C"},
   {"Patro Vlhkost   ", 0, 0, 0, 0, " %"},
   {"Prizemi Teplota ", 0, 50, 10000, 0, " \xDF""C"},
@@ -55,7 +60,7 @@ item_t MAINMENU[MAINMENUSIZE] = {
   {"T vystupni vody ", 0, 50, 10000, 0, " \xDF""C"},
   {"T vstupni  vody ", 0, 50, 10000, 0, " \xDF""C"},
   {"Cerpadlo        ", AUTO, 0, 0, 0, ""},
-  {"Kotel           ", AUTO, 0, 0, 0, ""},
+  {"Kotel           ", OFF, 0, 0, 0, ""},
   {"Nastaveni -> Sel", BLANK, 0, 0, 0, ""}
 };
 
@@ -67,14 +72,14 @@ enum SettingMenuItem {
   SETELHEATER,
   SETPUMP,
   SETHYSTER,
-  SETWATEROUTHEATER,
+  SETMAXWATEROUTHEATER, //  Max output temperature when the electric heater turns off and no longer contributes to the heating. 
   BACK,
   SETTINGSMENUSIZE
 };
 
 #define MINTEMP 0
 
-item_t SETTINGSMENU[SETTINGSMENUSIZE] =  {
+item_t SETTINGSMENU[] =  {
   {"Teplota Patro   ", DEFAULT_ROOM1_TEMP, TEMPSTEP, 10000, MINTEMP, " \xDF""C"},
   {"Teplota Prizemi ", DEFAULT_ROOM2_TEMP, TEMPSTEP, 1000, MINTEMP, " \xDF""C"},
   {"Zimni Provoz    ", ON, 1, ON, OFF, ""},
@@ -82,7 +87,7 @@ item_t SETTINGSMENU[SETTINGSMENUSIZE] =  {
   {"Provoz Kotle    ", DEFAULT_HEATER, 1, AUTO, OFF, ""},
   {"Provoz Cerpadla ", DEFAULT_PUMP, 1, AUTO, OFF, ""},
   {"Hystereze       ", DEFAULT_HYSTEREZE, TEMPSTEP, 300, MINTEMP, " \xDF""C"},
-  {"T Vody z Kotle  ", DEFAULT_HEATEROUTWATER, TEMPSTEP, 80000, 40000, " \xDF""C"},  // Preset output temperature of the electric heater. 
+  {"T Vody z Kotle  ", DEFAULT_HEATEROUTWATER, TEMPSTEP, 80000, 40000, " \xDF""C"},  
   {"Zpet <- Sel     ", BLANK, 0, 0, 0, ""}
 };
 
@@ -123,6 +128,7 @@ const unsigned long DEFAULT_WPONOFFTIME = 1200000;  // Once the pump is turned o
 const int DEFAULT_WTPUMP = 4500;          // When water temp is higher than 45 degrees, the water pump turns on
 const int BACKGLIGHTTIME = 20000;         // Turn off display backlight after 20s.
 const float CUTOFFHEATER = 0.95;          // If the input water into heater is 95% of output don't turn heater on. Keep it off
+const int DATASENDPERIOD = 10000;         // The data will be send to serial port every 10 seconds. 
 
 // Setup a oneWire instance to communicate with any OneWire devices
 OneWire oneWire(pin_WTS);
@@ -136,32 +142,7 @@ DHT dht2(pin_RT2, DHTTYPE);
 LiquidCrystal lcd(pin_RS, pin_EN, pin_d4, pin_d5, pin_d6, pin_d7);
 MyMenu main_menu(MAINMENUSIZE, MAINMENU);  // menu also stores measured values
 MyMenu settings_menu(SETTINGSMENUSIZE, SETTINGSMENU); // menu also stores configuration values 
-
-/* program start */
-void setup() {
-  // initialize the LCD
-  lcd.begin(16, 2);
-  lcd.setCursor(0, 0);
-  lcd.print("Inicializuji...");
-  // setup the buzzer, pump and heater pins as output
-  pinMode(pin_buzzer, OUTPUT);
-  pinMode(pin_WP, OUTPUT);
-  pinMode(pin_H, OUTPUT);
-  // Turn off both relays and the buzzer
-  stop_alarm();
-  digitalWrite(pin_WP, HIGH);
-  digitalWrite(pin_H, HIGH);
-  // Initiate the temperature libraries
-  sensors.begin();
-  sensors.setWaitForConversion(false);
-  dht1.begin();
-  dht2.begin();
-  read_sensors();  // get the first reading before getting to the control loop to avoid turn on/off at the beginning. 
-  delay(1500);
-  read_sensors();
-  // Read the settings from EEPROM
-  ReadEEPROM();
-}
+MySerial serial_link(9600); // Initialize the serial class for sending and receiving the key value pairs
 
 // Timer class is used to implement delays in some operations. 
 class MyTimer {
@@ -192,12 +173,99 @@ class MyTimer {
     }
 };
 
-void loop() {
-  static MyTimer T(BACKGLIGHTTIME, true); // timer to control display backlight. It turns off after BACKGLIGHTTIME seconds. 
+void read_sensors(bool immediate = false) {
+#ifdef DEBUG
+  static bool firsttime = true;
 
-  read_sensors();
-  int key = read_key();
-  // manage display backlight
+  if (firsttime) {
+    main_menu.value_set(ACTROOM1TEMP, DEFAULT_ROOM1_TEMP - 20);
+    main_menu.value_set(ACTROOM2TEMP, DEFAULT_ROOM2_TEMP - 20);
+    main_menu.value_set(ACTWATEROUTTEMP, DEFAULT_WTPUMP - 100);
+    main_menu.value_set(ACTWATERINTEMP, DEFAULT_WTPUMP - 100);    
+    firsttime = false;
+  }
+#else
+  // read water temperature and room temperature every 10 seconds
+  static MyTimer T(10000);  // create a timer for 10 seconds and start it immediately
+  
+  if (T.expired()) {
+    // Read water 1 temperature
+   // sensors.setWaitForConversion(false);
+    sensors.requestTemperatures();
+    float Water1T = sensors.getTempCByIndex(1); // index to be tried and set when sensor changes
+    if (Water1T != DEVICE_DISCONNECTED_C)
+      main_menu.value_set(ACTWATEROUTTEMP, (int)(100 * Water1T));
+    else
+      main_menu.value_set(ACTWATEROUTTEMP, ERROR);  // Error value
+    // Read water 2 temperature
+    float Water2T = sensors.getTempCByIndex(0); // index to be tried and set when sensor changes
+    if (Water2T != DEVICE_DISCONNECTED_C)
+      main_menu.value_set(ACTWATERINTEMP, (int)(100 * Water2T));
+    else
+      main_menu.value_set(ACTWATERINTEMP,  ERROR);  // Error value
+
+    // Read Rooms temperature and humidity
+    float Room1H = dht1.readHumidity();
+    float Room1T = dht1.readTemperature();
+    if (isnan(Room1T)) 
+      main_menu.value_set(ACTROOM1TEMP, ERROR);  // Error value 
+    else
+      main_menu.value_set(ACTROOM1TEMP, (int)(100 * Room1T));
+    if (isnan(Room1H))
+      main_menu.value_set(ACTROOM1HUM, ERROR);  // Error value
+    else
+      main_menu.value_set(ACTROOM1HUM, (int)(100 * Room1H));
+    
+    float Room2H = dht2.readHumidity();
+    float Room2T = dht2.readTemperature();
+    if (isnan(Room2T)) 
+      main_menu.value_set(ACTROOM2TEMP, ERROR);  // Error value
+    else
+      main_menu.value_set(ACTROOM2TEMP, (int)(100 * Room2T));
+    if (isnan(Room2H)) 
+      main_menu.value_set(ACTROOM2HUM, ERROR);  // Error value
+    else
+      main_menu.value_set(ACTROOM2HUM, (int)(100 * Room2H));
+   
+    T.start_timer();  // start the timer again
+  }
+#endif
+}
+
+/* program start */
+void setup() {
+  // initialize the LCD
+  lcd.begin(16, 2);
+  lcd.setCursor(0, 0);
+  lcd.print("Inicializuji...");
+  // setup the buzzer, pump and heater pins as output
+  pinMode(pin_buzzer, OUTPUT);
+  pinMode(pin_WP, OUTPUT);
+  pinMode(pin_H, OUTPUT);
+  // Turn off both relays and the buzzer
+  digitalWrite(pin_buzzer, HIGH);
+  digitalWrite(pin_WP, HIGH);
+  digitalWrite(pin_H, HIGH);
+  // Initiate the temperature libraries
+  sensors.begin();
+  sensors.setWaitForConversion(false);
+  dht1.begin();  
+  dht2.begin();  
+  read_sensors();  // get the first reading before getting to the control loop to avoid turn on/off at the beginning. 
+  delay(1500);
+  // Read the settings from EEPROM
+  ReadEEPROM();
+  // send the settings to the cloud
+  Serial.begin(9600);
+  serial_link.SendKVPair({"TT1", settings_menu.value_get(SETROOM1TEMP)});
+  serial_link.SendKVPair({"TT2", settings_menu.value_get(SETROOM2TEMP)});
+  int afv = (settings_menu.value_get(SETANTIFREEZE) == OFF) ? 0 : 1;
+  serial_link.SendKVPair({"AF", afv});
+}
+
+void backlight(int key) {
+  static MyTimer T(BACKGLIGHTTIME, true); // timer to control display backlight. It turns off after BACKGLIGHTTIME seconds. 
+  
   if (key != NONE) {
     pinMode(pin_BL, INPUT);
     T.start_timer();
@@ -206,9 +274,56 @@ void loop() {
     pinMode(pin_BL, OUTPUT);
     digitalWrite(pin_BL, LOW);
   }
+}
 
+void send_data() {
+// Send data from sensors to Serial where WiFi module picks it up and sends to the Arduino cloud
+// Sending it every 10 seconds)
+  static MyTimer T2(DATASENDPERIOD, true); // timer used to send data via serial every X seconds
+
+  if (T2.expired())
+  {
+    serial_link.SendKVPair({"T1", main_menu.value_get(ACTROOM1TEMP)});
+    serial_link.SendKVPair({"T2", main_menu.value_get(ACTROOM2TEMP)});
+    T2.start_timer();
+  }
+}
+
+void receive_data() {
+  keyvalue_pair_t kv;
+  
+  if (serial_link.ReceiveKVPair(kv))
+  {
+    Serial.println("data prijata");
+    
+    if (strcmp(kv.key, "TT1") == 0) {
+      settings_menu.value_set(SETROOM1TEMP, kv.value);
+    }
+    else if (strcmp(kv.key, "TT2") == 0) {
+      settings_menu.value_set(SETROOM2TEMP, kv.value);
+    }
+    else if (strcmp(kv.key, "AF") == 0) {
+      // TBD tady upravit value na ON OFF
+      int afv = (kv.value == 0) ? OFF : ON;
+      settings_menu.value_set(SETANTIFREEZE, afv);
+    }
+    //WriteEEPROM();
+  }
+}
+
+void loop() {
+  // read temperature and humidity
+  read_sensors();
+  // handle key presses
+  int key = read_key();
+  // manage display backlight
+  backlight(key);
   // manage rest 
   run_menu(key);
+  // send measured data to cloud and read the settings from there
+  send_data();
+  receive_data();
+  // Do the control logic
   control_system();
 }
 
@@ -394,73 +509,16 @@ void run_menu(int key) {
           menu_type = MAIN_MENU;
           settings_menu.beginning();
           WriteEEPROM();
+          serial_link.SendKVPair({"TT1", settings_menu.value_get(SETROOM1TEMP)});
+          serial_link.SendKVPair({"TT2", settings_menu.value_get(SETROOM2TEMP)});
+          int afv = (settings_menu.value_get(SETANTIFREEZE) == OFF) ? 0 : 1;
+          serial_link.SendKVPair({"AF", afv});
         }
     }
   }
 }
 
-void read_sensors() {
-#ifdef DEBUG
-  static bool firsttime = true;
 
-  if (firsttime) {
-    main_menu.value_set(ACTROOM1TEMP, DEFAULT_ROOM1_TEMP - 20);
-    main_menu.value_set(ACTROOM2TEMP, DEFAULT_ROOM2_TEMP - 20);
-    main_menu.value_set(ACTWATEROUTTEMP, DEFAULT_WTPUMP - 100);
-    main_menu.value_set(ACTWATERINTEMP, DEFAULT_WTPUMP - 100);    
-    firsttime = false;
-  }
-#else
-  // read water temperature and room temperature every 1 second
-  static MyTimer T(1000, true);  // create a timer for 1 second and start it immediately
-  
-  if (T.expired()) {
-    // Read water 1 temperature
-   // sensors.setWaitForConversion(false);
-    sensors.requestTemperatures();
-    float Water1T = sensors.getTempCByIndex(1); // index to be tried and set when sensor changes
-    if (Water1T != DEVICE_DISCONNECTED_C)
-      main_menu.value_set(ACTWATEROUTTEMP, (int)(100 * Water1T));
-    else
-      main_menu.value_set(ACTWATEROUTTEMP, ERROR);  // Error value
-    // Read water 2 temperature
-    float Water2T = sensors.getTempCByIndex(0); // index to be tried and set when sensor changes
-    if (Water2T != DEVICE_DISCONNECTED_C)
-      main_menu.value_set(ACTWATERINTEMP, (int)(100 * Water2T));
-    else
-      main_menu.value_set(ACTWATERINTEMP,  ERROR);  // Error value
-
-    // Read Rooms temperature and humidity
-    float Room1H = dht1.readHumidity();
-    float Room1T = dht1.readTemperature();
-    if (isnan(Room1T)) {
-      main_menu.value_set(ACTROOM1TEMP, ERROR);  // Error value 
-      dht1.begin(); // try to reset the sensor to succeed next time
-    }
-    else
-      main_menu.value_set(ACTROOM1TEMP, (int)(100 * Room1T));
-    if (isnan(Room1H)) {
-      main_menu.value_set(ACTROOM1HUM, ERROR);  // Error value
-      dht1.begin(); // try to reset the sensor to succeed next time
-    }
-    else
-      main_menu.value_set(ACTROOM1HUM, (int)(100 * Room1H));
-    
-    float Room2H = dht2.readHumidity();
-    float Room2T = dht2.readTemperature();
-    if (isnan(Room2T)) 
-      main_menu.value_set(ACTROOM2TEMP, ERROR);  // Error value
-    else
-      main_menu.value_set(ACTROOM2TEMP, (int)(100 * Room2T));
-    if (isnan(Room2H)) 
-      main_menu.value_set(ACTROOM2HUM, ERROR);  // Error value
-    else
-      main_menu.value_set(ACTROOM2HUM, (int)(100 * Room2H));
-
-    T.start_timer();  // start the timer again
-  }
-#endif
-}
 
 void control_system() {
   static MyHeater HT;
@@ -496,7 +554,7 @@ void control_system() {
       t = main_menu.value_get(master_sensor);
       if (t != ERROR) {
         if (t >= settings_menu.value_get(master_temp) + hystereze ||
-            main_menu.value_get(ACTWATEROUTTEMP) >= settings_menu.value_get(SETWATEROUTHEATER))
+            main_menu.value_get(ACTWATEROUTTEMP) >= settings_menu.value_get(SETMAXWATEROUTHEATER))
         HT.heater_off();
       else if (t < settings_menu.value_get(master_temp) - hystereze)
         HT.heater_on();          

@@ -1,10 +1,13 @@
 #include "Menu.h"
 
 
-MyMenu::MyMenu (int no_menu_items, item_t *i) {
+MyMenu::MyMenu (int no_menu_items, item_t *i, const char * const mmet[], int m_size) {
       max_index = no_menu_items - 1;
       items = i;
       index = 0;
+      for (int i = 0; i < m_size; i++) {
+        items[i].text_ptr = (char *)pgm_read_word(&mmet[i]);
+      }
     }
 
 void MyMenu::beginning() {
@@ -91,5 +94,9 @@ String MyMenu::value_getastext() {
 }
 
 String MyMenu::text_get() {
-  return items[index].text;
+  char buffer[17]; // 16 chars + NULL character
+
+  strcpy_P(buffer, items[index].text_ptr);
+  String output(buffer);
+  return output;
 }

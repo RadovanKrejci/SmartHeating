@@ -3,7 +3,6 @@ TODO
 1) in case any sensor malfunctions do something (what?)
 2) test remote control over WiFi
 3) Odstranit pipani na zacatku, nacist nejake realne hodnoty, jinak nez ctenim sensoru)
-4) nekde memory leak kazi menu settings
 */
 
 /* Smart control of fireplace stove and regular heater in one house. 
@@ -28,6 +27,7 @@ TODO
 #include <DallasTemperature.h>
 #include <DHT.h>
 #include <EEPROM.h>
+#include <avr/pgmspace.h> 
 #include "Menu.h"
 #include "MySerial.h"
 
@@ -52,16 +52,29 @@ enum MainMenuItem {
   SETTINGS,
   MAINMENUSIZE
 };
+
+const PROGMEM char ENTRY_1[] = "Patro Teplota   ";
+const PROGMEM char ENTRY_2[] = "Patro Vlhkost   ";
+const PROGMEM char ENTRY_3[] = "Prizemi Teplota ";
+const PROGMEM char ENTRY_4[] = "Prizemi Vlhkost ";
+const PROGMEM char ENTRY_5[] = "T vystupni vody ";
+const PROGMEM char ENTRY_6[] = "T vstupni  vody ";
+const PROGMEM char ENTRY_7[] = "Cerpadlo        ";
+const PROGMEM char ENTRY_8[] = "Kotel           ";
+const PROGMEM char ENTRY_9[] = "Nastaveni -> Sel";
+
+const PROGMEM char *const MMENTRIES_TABLE[] = {ENTRY_1, ENTRY_2, ENTRY_3, ENTRY_4, ENTRY_5, ENTRY_6, ENTRY_7, ENTRY_8, ENTRY_9};
+
 item_t MAINMENU[] = {
-  {"Patro Teplota   ", 0, 50, 10000, 0, " \xDF""C"},
-  {"Patro Vlhkost   ", 0, 0, 0, 0, " %"},
-  {"Prizemi Teplota ", 0, 50, 10000, 0, " \xDF""C"},
-  {"Prizemi Vlhkost ", 0, 0, 0, 0, " %"},
-  {"T vystupni vody ", 0, 50, 10000, 0, " \xDF""C"},
-  {"T vstupni  vody ", 0, 50, 10000, 0, " \xDF""C"},
-  {"Cerpadlo        ", AUTO, 0, 0, 0, ""},
-  {"Kotel           ", OFF, 0, 0, 0, ""},
-  {"Nastaveni -> Sel", BLANK, 0, 0, 0, ""}
+  {"", 0, 50, 10000, 0, " \xDF""C"},
+  {"", 0, 0, 0, 0, " %"},
+  {"", 0, 50, 10000, 0, " \xDF""C"},
+  {"", 0, 0, 0, 0, " %"},
+  {"", 0, 50, 10000, 0, " \xDF""C"},
+  {"", 0, 50, 10000, 0, " \xDF""C"},
+  {"", AUTO, 0, 0, 0, ""},
+  {"", OFF, 0, 0, 0, ""},
+  {"", BLANK, 0, 0, 0, ""}
 };
 
 enum SettingMenuItem {
@@ -79,16 +92,28 @@ enum SettingMenuItem {
 
 #define MINTEMP 0
 
+const PROGMEM char SENTRY_1[] = "Teplota Patro   ";
+const PROGMEM char SENTRY_2[] = "Teplota Prizemi ";
+const PROGMEM char SENTRY_3[] = "Zimni Provoz    ";
+const PROGMEM char SENTRY_4[] = "Max Teplota vody";
+const PROGMEM char SENTRY_5[] = "Provoz Kotle    ";
+const PROGMEM char SENTRY_6[] = "Provoz Cerpadla ";
+const PROGMEM char SENTRY_7[] = "Hystereze       ";
+const PROGMEM char SENTRY_8[] = "T Vody z Kotle  ";
+const PROGMEM char SENTRY_9[] = "Zpet <- Sel     ";
+
+const PROGMEM char *const SMENTRIES_TABLE[] = {SENTRY_1, SENTRY_2, SENTRY_3, SENTRY_4, SENTRY_5, SENTRY_6, SENTRY_7, SENTRY_8, SENTRY_9};
+
 item_t SETTINGSMENU[] =  {
-  {"Teplota Patro   ", DEFAULT_ROOM1_TEMP, TEMPSTEP, 10000, MINTEMP, " \xDF""C"},
-  {"Teplota Prizemi ", DEFAULT_ROOM2_TEMP, TEMPSTEP, 1000, MINTEMP, " \xDF""C"},
-  {"Zimni Provoz    ", ON, 1, ON, OFF, ""},
-  {"Max Teplota vody", DEFAULT_MAX_WATER_TEMP, TEMPSTEP, 9000, MINTEMP, " \xDF""C"},
-  {"Provoz Kotle    ", DEFAULT_HEATER, 1, AUTO, OFF, ""},
-  {"Provoz Cerpadla ", DEFAULT_PUMP, 1, AUTO, OFF, ""},
-  {"Hystereze       ", DEFAULT_HYSTEREZE, TEMPSTEP, 300, MINTEMP, " \xDF""C"},
-  {"T Vody z Kotle  ", DEFAULT_HEATEROUTWATER, TEMPSTEP, 80000, 40000, " \xDF""C"},  
-  {"Zpet <- Sel     ", BLANK, 0, 0, 0, ""}
+  {"", DEFAULT_ROOM1_TEMP, TEMPSTEP, 10000, MINTEMP, " \xDF""C"},
+  {"", DEFAULT_ROOM2_TEMP, TEMPSTEP, 1000, MINTEMP, " \xDF""C"},
+  {"", ON, 1, ON, OFF, ""},
+  {"", DEFAULT_MAX_WATER_TEMP, TEMPSTEP, 9000, MINTEMP, " \xDF""C"},
+  {"", DEFAULT_HEATER, 1, AUTO, OFF, ""},
+  {"", DEFAULT_PUMP, 1, AUTO, OFF, ""},
+  {"", DEFAULT_HYSTEREZE, TEMPSTEP, 300, MINTEMP, " \xDF""C"},
+  {"", DEFAULT_HEATEROUTWATER, TEMPSTEP, 80000, 40000, " \xDF""C"},  
+  {"", BLANK, 0, 0, 0, ""}
 };
 
 //LCD pin to Arduino
@@ -140,8 +165,8 @@ DHT dht2(pin_RT2, DHTTYPE);
 
 // global variables 
 LiquidCrystal lcd(pin_RS, pin_EN, pin_d4, pin_d5, pin_d6, pin_d7);
-MyMenu main_menu(MAINMENUSIZE, MAINMENU);  // menu also stores measured values
-MyMenu settings_menu(SETTINGSMENUSIZE, SETTINGSMENU); // menu also stores configuration values 
+MyMenu main_menu(MAINMENUSIZE, MAINMENU, MMENTRIES_TABLE, MAINMENUSIZE);  // menu also stores measured values
+MyMenu settings_menu(SETTINGSMENUSIZE, SETTINGSMENU, SMENTRIES_TABLE, SETTINGSMENUSIZE); // menu also stores configuration values 
 MySerial serial_link(9600); // Initialize the serial class for sending and receiving the key value pairs
 
 // Timer class is used to implement delays in some operations. 
@@ -257,10 +282,12 @@ void setup() {
   ReadEEPROM();
   // send the settings to the cloud
   Serial.begin(9600);
+  Serial.println("Initial setting:");
   serial_link.SendKVPair({"TT1", settings_menu.value_get(SETROOM1TEMP)});
   serial_link.SendKVPair({"TT2", settings_menu.value_get(SETROOM2TEMP)});
-  int afv = (settings_menu.value_get(SETANTIFREEZE) == OFF) ? 0 : 1;
-  serial_link.SendKVPair({"AF", afv});
+  //CHNG int afv = (settings_menu.value_get(SETANTIFREEZE) == OFF) ? 0 : 1;
+  //CHNG serial_link.SendKVPair({"AF", afv});
+  Serial.println("");
 }
 
 void backlight(int key) {
@@ -285,6 +312,7 @@ void send_data() {
   {
     serial_link.SendKVPair({"T1", main_menu.value_get(ACTROOM1TEMP)});
     serial_link.SendKVPair({"T2", main_menu.value_get(ACTROOM2TEMP)});
+    Serial.println("");
     T2.start_timer();
   }
 }
@@ -292,8 +320,7 @@ void send_data() {
 void receive_data() {
   keyvalue_pair_t kv;
   
-  if (serial_link.ReceiveKVPair(kv))
-  {
+  if (serial_link.ReceiveKVPair(kv)) {
     Serial.println("data prijata");
     
     if (strcmp(kv.key, "TT1") == 0) {
@@ -303,11 +330,10 @@ void receive_data() {
       settings_menu.value_set(SETROOM2TEMP, kv.value);
     }
     else if (strcmp(kv.key, "AF") == 0) {
-      // TBD tady upravit value na ON OFF
       int afv = (kv.value == 0) ? OFF : ON;
       settings_menu.value_set(SETANTIFREEZE, afv);
     }
-    //WriteEEPROM();
+    //WriteEEPROM(); TBD toto odkomentovat az bude odladeno
   }
 }
 
@@ -322,7 +348,7 @@ void loop() {
   run_menu(key);
   // send measured data to cloud and read the settings from there
   send_data();
-  receive_data();
+  // CHNG receive_data();
   // Do the control logic
   control_system();
 }
@@ -359,9 +385,10 @@ class MyHeater {
 // Pump class is used to provide persistence that allows delays between switch on and off. 
 class MyPump {
   private:
-    MyTimer T;  // Once the pump is turned on it will run for at least 30 minutes. 
+    MyTimer T;  // Once the pump is turned on it will run for a preset number of minutes. 
   
   public:
+    // TBD tohle nejak nefunguje. vypina se hned
     MyPump(unsigned long t = DEFAULT_WPONOFFTIME) : T(t) {
     }
     
@@ -509,10 +536,10 @@ void run_menu(int key) {
           menu_type = MAIN_MENU;
           settings_menu.beginning();
           WriteEEPROM();
-          serial_link.SendKVPair({"TT1", settings_menu.value_get(SETROOM1TEMP)});
-          serial_link.SendKVPair({"TT2", settings_menu.value_get(SETROOM2TEMP)});
+// CHNG           serial_link.SendKVPair({"TT1", settings_menu.value_get(SETROOM1TEMP)});
+ // CHNG          serial_link.SendKVPair({"TT2", settings_menu.value_get(SETROOM2TEMP)});
           int afv = (settings_menu.value_get(SETANTIFREEZE) == OFF) ? 0 : 1;
-          serial_link.SendKVPair({"AF", afv});
+ // CHNG          serial_link.SendKVPair({"AF", afv});
         }
     }
   }

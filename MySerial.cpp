@@ -4,15 +4,17 @@
 #include "MySerial.h"
 
 
-MySerial::MySerial(unsigned long speed = 9600) {
+MySerial::MySerial(unsigned long speed) {
   Serial.begin(speed);
 }
 
 void MySerial::SendKVPair (keyvalue_pair_t kv) {
-  char str[16];
+  char str[KEYMAXLENGTH + 4 + 5 + 1]; // Key lentgh + 4 chars ('<','>',' ',',') + 5 digits (max length of the int is 99999) + NULL 
   
-  sprintf(str, "<%s, %d>", kv.key, kv.value);
-  Serial.print(str);
+  if (kv.value < 99999) {
+    sprintf(str, "<%s, %d>", kv.key, kv.value);
+    Serial.print(str);
+  }
 }
 
 bool MySerial::ReceiveKVPair(keyvalue_pair_t &kv) {

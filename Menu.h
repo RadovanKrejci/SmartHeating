@@ -32,7 +32,7 @@ enum MenuValues {
 #define DEFAULT_HEATEROUTWATER 6000  // Preset max output temperature of when the electric heater turns off.
 
 typedef struct item {
-    String text; 
+    char *text_ptr; 
     int v;  // value for each menu item
     int v_increment; // value increment
     int v_max; // max value
@@ -46,8 +46,9 @@ class MyMenu {
     int max_index;
     item_t *items;
 
+
   public:
-    MyMenu (int no_menu_items, item_t *i);
+    MyMenu (int no_menu_items, item_t *i, const char * const mmet[], int m_size);
     void beginning();   // sets menu to first item
     void next();        // move to next menu item
     void prev();        // move to previous menu item

@@ -3,6 +3,7 @@ TODO
 1) in case any sensor malfunctions do something (what?)
 2) test remote control over WiFi
 3) Odstranit pipani na zacatku, nacist nejake realne hodnoty, jinak nez ctenim sensoru)
+4) Udelat testovaci vypisy na serial, pomoci makra kde kdyz bude DEBUG bude to psat
 */
 
 /* Smart control of fireplace stove and regular heater in one house. 
@@ -33,7 +34,20 @@ TODO
 
 #define VERSION 6 //  increasing the version number will force the replacement of EEPROM content by the defaults. Do it when changing the configuration set.
 #define VPOSITION 512 // position in EEPROM to store version number. Must be higher then SETTINGSMENUSIZE 
-//#define DEBUG // uncomment for debugging without the use of sensors. The values are then set in main menu using the keyboard
+//#define SENSORDEBUG // uncomment for debugging without the use of sensors. The values are then set in main menu using the keyboard
+//#define LOGGING // turn on logging messages on Serial 
+
+#ifdef LOGGING
+  #pragma message("Logging to Serial is ENABLED.")
+  #define LOG(x)  Serial.println(F(x))
+#else 
+  #define LOG(x) 
+#endif
+
+#ifdef SENSORDEBUG
+  #pragma message "Debugging without sensors enabled!"
+#endif
+
 
 enum menu_type {
   MAIN_MENU,
@@ -142,7 +156,7 @@ const int pin_WP = 18;  // Water pump pin relay
 const int pin_H = 19;   // Heater pin relay
 
 // Default values for the conrol functions
-#ifdef DEBUG
+#ifdef SENSORDEBUG
 const int DEFAULT_HONOFFTIME = 10000;   // test 10 sec. only
 const int DEFAULT_WPONOFFTIME = 10000;  // test 10 sec. only
 #else
@@ -199,7 +213,7 @@ class MyTimer {
 };
 
 void read_sensors(bool immediate = false) {
-#ifdef DEBUG
+ #ifdef SENSORDEBUG
   static bool firsttime = true;
 
   if (firsttime) {
@@ -209,7 +223,7 @@ void read_sensors(bool immediate = false) {
     main_menu.value_set(ACTWATERINTEMP, DEFAULT_WTPUMP - 100);    
     firsttime = false;
   }
-#else
+ #else
   // read water temperature and room temperature every 10 seconds
   static MyTimer T(10000);  // create a timer for 10 seconds and start it immediately
   
@@ -254,7 +268,7 @@ void read_sensors(bool immediate = false) {
    
     T.start_timer();  // start the timer again
   }
-#endif
+ #endif
 }
 
 /* program start */
@@ -282,11 +296,11 @@ void setup() {
   ReadEEPROM();
   // send the settings to the cloud
   Serial.begin(9600);
-  Serial.println("Initial setting:");
+  LOG(("Initial setting:"));
   serial_link.SendKVPair({"TT1", settings_menu.value_get(SETROOM1TEMP)});
   serial_link.SendKVPair({"TT2", settings_menu.value_get(SETROOM2TEMP)});
-  //CHNG int afv = (settings_menu.value_get(SETANTIFREEZE) == OFF) ? 0 : 1;
-  //CHNG serial_link.SendKVPair({"AF", afv});
+  int afv = (settings_menu.value_get(SETANTIFREEZE) == OFF) ? 0 : 1;
+  serial_link.SendKVPair({"AF", afv});
   Serial.println("");
 }
 
@@ -319,21 +333,29 @@ void send_data() {
 
 void receive_data() {
   keyvalue_pair_t kv;
+  bool save2EEPROM = false;
   
   if (serial_link.ReceiveKVPair(kv)) {
-    Serial.println("data prijata");
+    LOG("Data prijata z cloudu"); 
     
     if (strcmp(kv.key, "TT1") == 0) {
       settings_menu.value_set(SETROOM1TEMP, kv.value);
+      save2EEPROM = true;
     }
     else if (strcmp(kv.key, "TT2") == 0) {
       settings_menu.value_set(SETROOM2TEMP, kv.value);
+      save2EEPROM = true;
     }
     else if (strcmp(kv.key, "AF") == 0) {
       int afv = (kv.value == 0) ? OFF : ON;
       settings_menu.value_set(SETANTIFREEZE, afv);
+      save2EEPROM = true;
     }
-    //WriteEEPROM(); TBD toto odkomentovat az bude odladeno
+    
+    if (save2EEPROM) {
+        WriteEEPROM();
+        LOG("Saving new settings from cloud to EEPROM"); 
+    }   
   }
 }
 
@@ -348,7 +370,7 @@ void loop() {
   run_menu(key);
   // send measured data to cloud and read the settings from there
   send_data();
-  // CHNG receive_data();
+  receive_data();
   // Do the control logic
   control_system();
 }
@@ -482,7 +504,7 @@ void run_menu(int key) {
   
   if (menu_type == MAIN_MENU) {
     display_2lines(main_menu.text_get(), main_menu.value_getastext());
-#ifdef DEBUG
+  #ifdef SENSORDEBUG
   switch (key) {
     case DOWN:
       main_menu.next();
@@ -503,8 +525,8 @@ void run_menu(int key) {
         menu_type = SETTINGS_MENU;
         main_menu.beginning();
       }
-  }
-#else
+    }
+    #else
     if (key == DOWN || key == RIGHT)
       main_menu.next();
     else if (key == UP || key == LEFT)
@@ -513,7 +535,7 @@ void run_menu(int key) {
       menu_type = SETTINGS_MENU;
       main_menu.beginning();
     }
-#endif
+  #endif
   } else if (menu_type == SETTINGS_MENU) {
     display_2lines(settings_menu.text_get(), settings_menu.value_getastext());
     switch (key) {
@@ -535,17 +557,19 @@ void run_menu(int key) {
         if (settings_menu.last()) {
           menu_type = MAIN_MENU;
           settings_menu.beginning();
+          // save into permanent storage
           WriteEEPROM();
-// CHNG           serial_link.SendKVPair({"TT1", settings_menu.value_get(SETROOM1TEMP)});
- // CHNG          serial_link.SendKVPair({"TT2", settings_menu.value_get(SETROOM2TEMP)});
+          // save into the cloud
+          LOG("Zmena nastaveni, posilam do Cloudu");
+          serial_link.SendKVPair({"TT1", settings_menu.value_get(SETROOM1TEMP)});
+          serial_link.SendKVPair({"TT2", settings_menu.value_get(SETROOM2TEMP)});
           int afv = (settings_menu.value_get(SETANTIFREEZE) == OFF) ? 0 : 1;
- // CHNG          serial_link.SendKVPair({"AF", afv});
+          serial_link.SendKVPair({"AF", afv});
+          Serial.println("");
         }
     }
   }
 }
-
-
 
 void control_system() {
   static MyHeater HT;

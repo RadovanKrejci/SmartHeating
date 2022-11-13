@@ -291,7 +291,7 @@ void send_data(bool force = false) {
     serial_link.SendKVPair({"TT1", settings_menu.value_get(SETROOM1TEMP)});
     serial_link.SendKVPair({"TT2", settings_menu.value_get(SETROOM2TEMP)});
     int afv = (settings_menu.value_get(SETANTIFREEZE) == OFF) ? 0 : 1;
-    serial_link.SendKVPair({"AF", settings_menu.value_get(SETANTIFREEZE)});
+    serial_link.SendKVPair({"AF", afv});
     Serial.println("");
     T2.start_timer();
   }
@@ -590,7 +590,7 @@ void control_system() {
   if (t != ERROR) {
     if (t >= settings_menu.value_get(SETMAXWATERTEMP))
       start_alarm();
-    else if (main_menu.value_get(ACTWATEROUTTEMP) < settings_menu.value_get(SETMAXWATERTEMP))
+    else if (t < settings_menu.value_get(SETMAXWATERTEMP))
       stop_alarm();
   }
   

@@ -21,7 +21,7 @@ class keyvalue_pair_t {
     }
 };
 
-#define NUMCHARS 32 // buffer size for serial reader
+#define NUMCHARS 64 // buffer size for serial reader
 
 class MySerial {
   private:

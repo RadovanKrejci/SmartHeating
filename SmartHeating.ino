@@ -1,21 +1,21 @@
 /*
 TODO
 1) in case any sensor malfunctions do something (what?)
-2) test remote control over WiFi
-3) Odstranit pipani na zacatku, nacist nejake realne hodnoty, jinak nez ctenim sensoru)
-4) Udelat testovaci vypisy na serial, pomoci makra kde kdyz bude DEBUG bude to psat
+2) Refactor sensor reading (same code repeating all the time)
+3) 
 */
 
-/* Smart control of fireplace stove and regular heater in one house. 
+/* Smart control of fireplace stove heating and electric heater in one house. 
  Main features are:
   1) Safety - should the water from fireplace be too hot it turns on the pump to cool it down and if it reaches critical threshold an alarm turns on
   2) Thermostat - turns heater on / off as needed to combine the power with fireplace stove and raeach preset temperature.
       Thermostat uses two different sensors for two different scenarios
-    a) Winter / antifreeze - sensor that is placed close to plumbing is used to maintain low temperature but avoid the water to freeze (5 degrees)
-    b) Normal / Summer - sensor placed in the main room is used to maintaing comfortable temperature (e.g. 22 degrees)
+    a) Winter / antifreeze - sensor 2 that is placed close to plumbing is used to maintain low temperature but avoid the water to freeze (5 degrees)
+    b) Normal / Summer - sensor 1 placed in the main room is used to maintaing comfortable temperature (e.g. 22 degrees)
+  
   3) Other 
       - the pump as well as main heater are turned on / off with preset delays to avoid their damage in case of frequent switches.
-      - the entire system can easily be configured and status checked in 2x16 display
+      - the entire system can easily be configured and status checked on 2x16 display
       - the electric heater does not turn on if the stove output water temperature is higher then the preset output temperature of the electric heater.
       - some other small things.
   Language: menu items are in czech. 
@@ -55,15 +55,15 @@ enum menu_type {
 };
 
 enum MainMenuItem {
-  ACTROOM1TEMP = 0,
-  ACTROOM1HUM,
-  ACTROOM2TEMP,
-  ACTROOM2HUM,
-  ACTWATEROUTTEMP,
-  ACTWATERINTEMP, 
-  ACTPUMPON,
-  ACTELHEATERON,
-  SETTINGS,
+  ACTROOM1TEMP = 0,   // Measured temperature in Room 1
+  ACTROOM1HUM,        // Measured humidity in Room 1
+  ACTROOM2TEMP,       // Measured temperature in Room 2
+  ACTROOM2HUM,        // Measured humidity in Room 2
+  ACTWATEROUTTEMP,    // Measured temperature of water leaving the fireplace stove 
+  ACTWATERINTEMP,     // Measured temperature of water coming back to the heater
+  ACTPUMPON,          // True if the pump is running
+  ACTELHEATERON,      // True if the electric heater is running
+  SETTINGS,           
   MAINMENUSIZE
 };
 
@@ -92,13 +92,13 @@ item_t MAINMENU[] = {
 };
 
 enum SettingMenuItem {
-  SETROOM1TEMP = 0,
-  SETROOM2TEMP,
-  SETANTIFREEZE,
-  SETMAXWATERTEMP,
-  SETELHEATER,
-  SETPUMP,
-  SETHYSTER,
+  SETROOM1TEMP = 0,     // The preset temperature for Room 1
+  SETROOM2TEMP,         // The preset temperature for Room 2
+  SETANTIFREEZE,        // Switch from winter to summer operation. If True, Room 2 temperature is used for thermostat
+  SETMAXWATERTEMP,      // Maximum allowed water temperature. If exceeded, the alarm turns on.
+  SETELHEATER,          // Mode of operation for heater, ON, OFF, AUTO - thermostat
+  SETPUMP,              // Mode of operation for pumo, ON, OFF, AUTO - turns on if water temp is above preset value
+  SETHYSTER,            // Thermostat hysterezion
   SETMAXWATEROUTHEATER, //  Max output temperature when the electric heater turns off and no longer contributes to the heating. 
   BACK,
   SETTINGSMENUSIZE
@@ -164,10 +164,9 @@ const unsigned long DEFAULT_HONOFFTIME = 600000;    // Heater can't be turned on
 const unsigned long DEFAULT_WPONOFFTIME = 1200000;  // Once the pump is turned on it will run for at least 20 minutes. 
 #endif
 
-const int DEFAULT_WTPUMP = 4500;          // When water temp is higher than 45 degrees, the water pump turns on
-const int BACKGLIGHTTIME = 20000;         // Turn off display backlight after 20s.
-const float CUTOFFHEATER = 0.95;          // If the input water into heater is 95% of output don't turn heater on. Keep it off
-const int DATASENDPERIOD = 10000;         // The data will be send to serial port every 10 seconds. 
+const int DEFAULT_WTPUMP = 4500;      // When water temp is higher than 45 degrees, the water pump turns on
+const int BACKGLIGHTTIME = 20000;     // Turn off display backlight after 20s.
+const int DATASENDPERIOD = 1500;      // The data will be send to serial port every 15 seconds. 
 
 // Setup a oneWire instance to communicate with any OneWire devices
 OneWire oneWire(pin_WTS);
@@ -225,21 +224,25 @@ void read_sensors(bool immediate = false) {
   }
  #else
   // read water temperature and room temperature every 10 seconds
-  static MyTimer T(10000);  // create a timer for 10 seconds and start it immediately
+  static MyTimer T(5000);  // create a timer for 5 seconds and start it immediately
   
   if (T.expired()) {
     // Read water 1 temperature
    // sensors.setWaitForConversion(false);
     sensors.requestTemperatures();
     float Water1T = sensors.getTempCByIndex(1); // index to be tried and set when sensor changes
-    if (Water1T != DEVICE_DISCONNECTED_C)
-      main_menu.value_set(ACTWATEROUTTEMP, (int)(100 * Water1T));
+    if (Water1T != DEVICE_DISCONNECTED_C) {
+      int d_Water1T = (4 * main_menu.value_get(ACTWATEROUTTEMP) + (int)(Water1T * 100)) / 5; // approximately an average of last 5 values
+      main_menu.value_set(ACTWATEROUTTEMP, d_Water1T);
+    }
     else
       main_menu.value_set(ACTWATEROUTTEMP, ERROR);  // Error value
     // Read water 2 temperature
     float Water2T = sensors.getTempCByIndex(0); // index to be tried and set when sensor changes
-    if (Water2T != DEVICE_DISCONNECTED_C)
-      main_menu.value_set(ACTWATERINTEMP, (int)(100 * Water2T));
+    if (Water2T != DEVICE_DISCONNECTED_C) {
+      int d_Water2T = (4 * main_menu.value_get(ACTWATERINTEMP) + (int)(Water2T * 100)) / 5; // approximately an average of last 5 values
+      main_menu.value_set(ACTWATERINTEMP, d_Water2T);
+    }
     else
       main_menu.value_set(ACTWATERINTEMP,  ERROR);  // Error value
 
@@ -248,19 +251,23 @@ void read_sensors(bool immediate = false) {
     float Room1T = dht1.readTemperature();
     if (isnan(Room1T)) 
       main_menu.value_set(ACTROOM1TEMP, ERROR);  // Error value 
-    else
-      main_menu.value_set(ACTROOM1TEMP, (int)(100 * Room1T));
+    else {
+      int d_Room1T = (4 * main_menu.value_get(ACTROOM1TEMP) + (int)(Room1T * 100)) / 5; // approximately an average of last 5 values
+      main_menu.value_set(ACTROOM1TEMP, d_Room1T);
+    }
     if (isnan(Room1H))
       main_menu.value_set(ACTROOM1HUM, ERROR);  // Error value
-    else
+    else 
       main_menu.value_set(ACTROOM1HUM, (int)(100 * Room1H));
     
     float Room2H = dht2.readHumidity();
     float Room2T = dht2.readTemperature();
     if (isnan(Room2T)) 
       main_menu.value_set(ACTROOM2TEMP, ERROR);  // Error value
-    else
-      main_menu.value_set(ACTROOM2TEMP, (int)(100 * Room2T));
+    else {
+      int d_Room2T = (4 * main_menu.value_get(ACTROOM2TEMP) + (int)(Room2T * 100)) / 5; // approximately an average of last 5 values
+      main_menu.value_set(ACTROOM2TEMP, d_Room2T);
+    }
     if (isnan(Room2H)) 
       main_menu.value_set(ACTROOM2HUM, ERROR);  // Error value
     else
@@ -271,8 +278,29 @@ void read_sensors(bool immediate = false) {
  #endif
 }
 
+void send_data(bool force = false) {
+// Send data from sensors to Serial where WiFi module picks it up and sends to the Arduino cloud
+// Sending it every 10 seconds)
+  static MyTimer T2(DATASENDPERIOD, true); // timer used to send data via serial every X seconds
+
+  if (T2.expired() || force)
+  {
+    serial_link.SendKVPair({"T1", main_menu.value_get(ACTROOM1TEMP)});
+    serial_link.SendKVPair({"T2", main_menu.value_get(ACTROOM2TEMP)});
+    Serial.println("");
+    serial_link.SendKVPair({"TT1", settings_menu.value_get(SETROOM1TEMP)});
+    serial_link.SendKVPair({"TT2", settings_menu.value_get(SETROOM2TEMP)});
+    int afv = (settings_menu.value_get(SETANTIFREEZE) == OFF) ? 0 : 1;
+    serial_link.SendKVPair({"AF", settings_menu.value_get(SETANTIFREEZE)});
+    Serial.println("");
+    T2.start_timer();
+  }
+}
+
 /* program start */
 void setup() {
+  Serial.begin(9600);
+  delay(1500);
   // initialize the LCD
   lcd.begin(16, 2);
   lcd.setCursor(0, 0);
@@ -291,17 +319,11 @@ void setup() {
   dht1.begin();  
   dht2.begin();  
   read_sensors();  // get the first reading before getting to the control loop to avoid turn on/off at the beginning. 
-  delay(1500);
   // Read the settings from EEPROM
   ReadEEPROM();
   // send the settings to the cloud
-  Serial.begin(9600);
   LOG(("Initial setting:"));
-  serial_link.SendKVPair({"TT1", settings_menu.value_get(SETROOM1TEMP)});
-  serial_link.SendKVPair({"TT2", settings_menu.value_get(SETROOM2TEMP)});
-  int afv = (settings_menu.value_get(SETANTIFREEZE) == OFF) ? 0 : 1;
-  serial_link.SendKVPair({"AF", afv});
-  Serial.println("");
+  send_data(true);
 }
 
 void backlight(int key) {
@@ -314,20 +336,6 @@ void backlight(int key) {
   else if (T.expired()) {
     pinMode(pin_BL, OUTPUT);
     digitalWrite(pin_BL, LOW);
-  }
-}
-
-void send_data() {
-// Send data from sensors to Serial where WiFi module picks it up and sends to the Arduino cloud
-// Sending it every 10 seconds)
-  static MyTimer T2(DATASENDPERIOD, true); // timer used to send data via serial every X seconds
-
-  if (T2.expired())
-  {
-    serial_link.SendKVPair({"T1", main_menu.value_get(ACTROOM1TEMP)});
-    serial_link.SendKVPair({"T2", main_menu.value_get(ACTROOM2TEMP)});
-    Serial.println("");
-    T2.start_timer();
   }
 }
 

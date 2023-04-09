@@ -211,6 +211,14 @@ class MyTimer {
     }
 };
 
+// update the value of temp and humidity 
+// converts the float value into integet (*100) and averages out too smoothen the values
+// this is a helper function used in read_sensors() functions
+void update_mainmenu_value (int item, float value) {
+      int d_value = (4 * main_menu.value_get(item) + (int)(value * 100)) / 5; // approximately an average of last 5 values
+      main_menu.value_set(item, d_value);
+}
+
 void read_sensors(bool immediate = false) {
  #ifdef SENSORDEBUG
   static bool firsttime = true;
@@ -227,22 +235,19 @@ void read_sensors(bool immediate = false) {
   static MyTimer T(5000);  // create a timer for 5 seconds and start it immediately
   
   if (T.expired()) {
-    // Read water 1 temperature
-   // sensors.setWaitForConversion(false);
     sensors.requestTemperatures();
+
+    // Read water 1 temperature
     float Water1T = sensors.getTempCByIndex(1); // index to be tried and set when sensor changes
-    if (Water1T != DEVICE_DISCONNECTED_C) {
-      int d_Water1T = (4 * main_menu.value_get(ACTWATEROUTTEMP) + (int)(Water1T * 100)) / 5; // approximately an average of last 5 values
-      main_menu.value_set(ACTWATEROUTTEMP, d_Water1T);
-    }
+    if (Water1T != DEVICE_DISCONNECTED_C) 
+      update_mainmenu_value(ACTWATEROUTTEMP, Water1T);
     else
       main_menu.value_set(ACTWATEROUTTEMP, ERROR);  // Error value
+
     // Read water 2 temperature
     float Water2T = sensors.getTempCByIndex(0); // index to be tried and set when sensor changes
-    if (Water2T != DEVICE_DISCONNECTED_C) {
-      int d_Water2T = (4 * main_menu.value_get(ACTWATERINTEMP) + (int)(Water2T * 100)) / 5; // approximately an average of last 5 values
-      main_menu.value_set(ACTWATERINTEMP, d_Water2T);
-    }
+    if (Water2T != DEVICE_DISCONNECTED_C) 
+      update_mainmenu_value(ACTWATERINTEMP, Water2T);
     else
       main_menu.value_set(ACTWATERINTEMP,  ERROR);  // Error value
 
@@ -251,10 +256,9 @@ void read_sensors(bool immediate = false) {
     float Room1T = dht1.readTemperature();
     if (isnan(Room1T)) 
       main_menu.value_set(ACTROOM1TEMP, ERROR);  // Error value 
-    else {
-      int d_Room1T = (4 * main_menu.value_get(ACTROOM1TEMP) + (int)(Room1T * 100)) / 5; // approximately an average of last 5 values
-      main_menu.value_set(ACTROOM1TEMP, d_Room1T);
-    }
+    else 
+      update_mainmenu_value(ACTROOM1TEMP, Room1T);
+
     if (isnan(Room1H))
       main_menu.value_set(ACTROOM1HUM, ERROR);  // Error value
     else 
@@ -264,10 +268,9 @@ void read_sensors(bool immediate = false) {
     float Room2T = dht2.readTemperature();
     if (isnan(Room2T)) 
       main_menu.value_set(ACTROOM2TEMP, ERROR);  // Error value
-    else {
-      int d_Room2T = (4 * main_menu.value_get(ACTROOM2TEMP) + (int)(Room2T * 100)) / 5; // approximately an average of last 5 values
-      main_menu.value_set(ACTROOM2TEMP, d_Room2T);
-    }
+    else 
+      update_mainmenu_value(ACTROOM2TEMP, Room2T);
+   
     if (isnan(Room2H)) 
       main_menu.value_set(ACTROOM2HUM, ERROR);  // Error value
     else
@@ -278,9 +281,9 @@ void read_sensors(bool immediate = false) {
  #endif
 }
 
-void send_data(bool force = false) {
 // Send data from sensors to Serial where WiFi module picks it up and sends to the Arduino cloud
-// Sending it every 10 seconds)
+// Sending it every DATASENDPERIOD seconds
+void send_data(bool force = false) {
   static MyTimer T2(DATASENDPERIOD, true); // timer used to send data via serial every X seconds
 
   if (T2.expired() || force)
@@ -288,11 +291,14 @@ void send_data(bool force = false) {
     serial_link.SendKVPair({"T1", main_menu.value_get(ACTROOM1TEMP)});
     serial_link.SendKVPair({"T2", main_menu.value_get(ACTROOM2TEMP)});
     Serial.println("");
-    serial_link.SendKVPair({"TT1", settings_menu.value_get(SETROOM1TEMP)});
-    serial_link.SendKVPair({"TT2", settings_menu.value_get(SETROOM2TEMP)});
-    int afv = (settings_menu.value_get(SETANTIFREEZE) == OFF) ? 0 : 1;
-    serial_link.SendKVPair({"AF", afv});
-    Serial.println("");
+    if (force)
+    {
+      serial_link.SendKVPair({"TT1", settings_menu.value_get(SETROOM1TEMP)});
+      serial_link.SendKVPair({"TT2", settings_menu.value_get(SETROOM2TEMP)});
+      int afv = (settings_menu.value_get(SETANTIFREEZE) == OFF) ? 0 : 1;
+      serial_link.SendKVPair({"AF", afv});
+      Serial.println("");
+    }
     T2.start_timer();
   }
 }

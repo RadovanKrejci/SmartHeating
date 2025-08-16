@@ -2,7 +2,7 @@
 TODO
 1) in case any sensor malfunctions do something (what?)
 2) Refactor sensor reading (same code repeating all the time)
-3) 
+3) Teplota vody nefunguje kdyz prekroci cca 64 stupnu, pak dojde do minusu a znovu roste (preteceni nekde?)
 */
 
 /* Smart control of fireplace stove heating and electric heater in one house. 
@@ -60,7 +60,7 @@ enum MainMenuItem {
   ACTROOM2TEMP,       // Measured temperature in Room 2
   ACTROOM2HUM,        // Measured humidity in Room 2
   ACTWATEROUTTEMP,    // Measured temperature of water leaving the fireplace stove 
-  ACTWATERINTEMP,     // Measured temperature of water coming back to the heater
+  ACTWATERINTEMP,     // Measured temperature of water coming back to the electrical heater
   ACTPUMPON,          // True if the pump is running
   ACTELHEATERON,      // True if the electric heater is running
   SETTINGS,           
@@ -166,7 +166,7 @@ const unsigned long DEFAULT_WPONOFFTIME = 1200000;  // Once the pump is turned o
 
 const int DEFAULT_WTPUMP = 4500;      // When water temp is higher than 45 degrees, the water pump turns on
 const int BACKGLIGHTTIME = 20000;     // Turn off display backlight after 20s.
-const int DATASENDPERIOD = 1500;      // The data will be send to serial port every 15 seconds. 
+const int DATASENDPERIOD = 60000;      // The data will be send to serial port every 60 seconds. 
 
 // Setup a oneWire instance to communicate with any OneWire devices
 OneWire oneWire(pin_WTS);
@@ -212,10 +212,10 @@ class MyTimer {
 };
 
 // update the value of temp and humidity 
-// converts the float value into integet (*100) and averages out too smoothen the values
+// converts the float value into integer (*100) and averages out too smoothen the values
 // this is a helper function used in read_sensors() functions
 void update_mainmenu_value (int item, float value) {
-      int d_value = (4 * main_menu.value_get(item) + (int)(value * 100)) / 5; // approximately an average of last 5 values
+      int d_value = (int)((4 * main_menu.value_get(item) + (int)(value * 100)) / 5); // approximately an average of last 5 values
       main_menu.value_set(item, d_value);
 }
 
@@ -290,6 +290,10 @@ void send_data(bool force = false) {
   {
     serial_link.SendKVPair({"T1", main_menu.value_get(ACTROOM1TEMP)});
     serial_link.SendKVPair({"T2", main_menu.value_get(ACTROOM2TEMP)});
+    serial_link.SendKVPair({"H1", main_menu.value_get(ACTROOM1HUM)});
+    serial_link.SendKVPair({"H2", main_menu.value_get(ACTROOM2HUM)});
+    serial_link.SendKVPair({"WT1", main_menu.value_get(ACTWATEROUTTEMP)});
+    serial_link.SendKVPair({"WT2", main_menu.value_get(ACTWATERINTEMP)});
     Serial.println("");
     if (force)
     {
@@ -588,7 +592,7 @@ void run_menu(int key) {
 void control_system() {
   static MyHeater HT;
   static MyPump P;
-  int hystereze = settings_menu.value_get(SETHYSTER);  //  up and down difference. Mozna by melo byt ve stupnich, nikoliv procentech.
+  int hystereze = settings_menu.value_get(SETHYSTER);  //  up and down difference. TBD Mozna by melo byt ve stupnich, nikoliv procentech.
   int t; 
 
   // Any water temp > Max water temp => run Alarm, else stop Alarm. This is to avoid boiling the water out of stove. 

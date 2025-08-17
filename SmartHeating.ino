@@ -166,7 +166,7 @@ const unsigned long DEFAULT_WPONOFFTIME = 1200000;  // Once the pump is turned o
 
 const int DEFAULT_WTPUMP = 4500;      // When water temp is higher than 45 degrees, the water pump turns on
 const int BACKGLIGHTTIME = 20000;     // Turn off display backlight after 20s.
-const int DATASENDPERIOD = 60000;      // The data will be send to serial port every 60 seconds. 
+const unsigned long DATASENDPERIOD = 60000;      // The data will be send to serial port every 60 seconds. 
 
 // Setup a oneWire instance to communicate with any OneWire devices
 OneWire oneWire(pin_WTS);
@@ -215,8 +215,10 @@ class MyTimer {
 // converts the float value into integer (*100) and averages out too smoothen the values
 // this is a helper function used in read_sensors() functions
 void update_mainmenu_value (int item, float value) {
-      int d_value = (int)((4 * main_menu.value_get(item) + (int)(value * 100)) / 5); // approximately an average of last 5 values
-      main_menu.value_set(item, d_value);
+      if (value > SPECIALVALUE) {    //in case of error, do not change the value, keep the last one. 
+        int d_value = (int)((4 * main_menu.value_get(item) + (int)(value * 100)) / 5); // approximately an average of last 5 values
+        main_menu.value_set(item, d_value);
+      }     
 }
 
 void read_sensors(bool immediate = false) {
@@ -428,7 +430,6 @@ class MyPump {
     MyTimer T;  // Once the pump is turned on it will run for a preset number of minutes. 
   
   public:
-    // TBD tohle nejak nefunguje. vypina se hned
     MyPump(unsigned long t = DEFAULT_WPONOFFTIME) : T(t) {
     }
     

@@ -2,7 +2,6 @@
 TODO
 1) in case any sensor malfunctions do something (what?)
 2) Refactor sensor reading (same code repeating all the time)
-3) Teplota vody nefunguje kdyz prekroci cca 64 stupnu, pak dojde do minusu a znovu roste (preteceni nekde?)
 */
 
 /* Smart control of fireplace stove heating and electric heater in one house. 
@@ -104,7 +103,7 @@ enum SettingMenuItem {
   SETTINGSMENUSIZE
 };
 
-#define MINTEMP 0
+#define MINTEMP 300 // Minimum temperature that the thermostat can be set to is 3 degrees. 
 
 const PROGMEM char SENTRY_1[] = "Teplota Patro   ";
 const PROGMEM char SENTRY_2[] = "Teplota Prizemi ";
@@ -118,15 +117,18 @@ const PROGMEM char SENTRY_9[] = "Zpet <- Sel     ";
 
 const PROGMEM char *const SMENTRIES_TABLE[] = {SENTRY_1, SENTRY_2, SENTRY_3, SENTRY_4, SENTRY_5, SENTRY_6, SENTRY_7, SENTRY_8, SENTRY_9};
 
+const int MAXTEMPHEATING = 3000; // Thermostat will go max to 30 degrees, will not heat to more then that. 
+const int MAXAFHEATING = 1000; // THermostat will not heat beyond 10 degrees in the Antifreeze mode. 
+
 item_t SETTINGSMENU[] =  {
-  {"", DEFAULT_ROOM1_TEMP, TEMPSTEP, 10000, MINTEMP, " \xDF""C"},
-  {"", DEFAULT_ROOM2_TEMP, TEMPSTEP, 1000, MINTEMP, " \xDF""C"},
+  {"", DEFAULT_ROOM1_TEMP, TEMPSTEP, MAXTEMPHEATING, MINTEMP, " \xDF""C"}, 
+  {"", DEFAULT_ROOM2_TEMP, TEMPSTEP, MAXAFHEATING, MINTEMP, " \xDF""C"},
   {"", ON, 1, ON, OFF, ""},
   {"", DEFAULT_MAX_WATER_TEMP, TEMPSTEP, 9000, MINTEMP, " \xDF""C"},
   {"", DEFAULT_HEATER, 1, AUTO, OFF, ""},
   {"", DEFAULT_PUMP, 1, AUTO, OFF, ""},
-  {"", DEFAULT_HYSTEREZE, TEMPSTEP, 300, MINTEMP, " \xDF""C"},
-  {"", DEFAULT_HEATEROUTWATER, TEMPSTEP, 80000, 40000, " \xDF""C"},  
+  {"", DEFAULT_HYSTEREZE, TEMPSTEP, 300, 10, " \xDF""C"},
+  {"", DEFAULT_HEATEROUTWATER, TEMPSTEP, 6000, 4000, " \xDF""C"},  
   {"", BLANK, 0, 0, 0, ""}
 };
 
@@ -164,9 +166,10 @@ const unsigned long DEFAULT_HONOFFTIME = 600000;    // Heater can't be turned on
 const unsigned long DEFAULT_WPONOFFTIME = 1200000;  // Once the pump is turned on it will run for at least 20 minutes. 
 #endif
 
-const int DEFAULT_WTPUMP = 4500;      // When water temp is higher than 45 degrees, the water pump turns on
+const int DEFAULT_WTPUMP = 3000;      // When water temp is higher than 30 degrees, the water pump turns on
 const int BACKGLIGHTTIME = 20000;     // Turn off display backlight after 20s.
 const unsigned long DATASENDPERIOD = 60000;      // The data will be send to serial port every 60 seconds. 
+const int HBTIMEOUT = 180000;         // Time out for hear beat messages from HA. 
 
 // Setup a oneWire instance to communicate with any OneWire devices
 OneWire oneWire(pin_WTS);
@@ -216,7 +219,11 @@ class MyTimer {
 // this is a helper function used in read_sensors() functions
 void update_mainmenu_value (int item, float value) {
       if (value > SPECIALVALUE) {    //in case of error, do not change the value, keep the last one. 
-        int d_value = (int)((4 * main_menu.value_get(item) + (int)(value * 100)) / 5); // approximately an average of last 5 values
+      
+        long prev_value = (long)main_menu.value_get(item); // need 32 bits, for 16 bits I'd have 32767 / 5 is roughly 6500, i.a. at 65 degrees I will have overflow
+        long avg_value = (4L * prev_value + (long)(value * 100)) / 5L;
+        int d_value = (int)avg_value;
+      
         main_menu.value_set(item, d_value);
       }     
 }
@@ -354,9 +361,10 @@ void backlight(int key) {
 void receive_data() {
   keyvalue_pair_t kv;
   bool save2EEPROM = false;
+  static MyTimer hb_timer(HBTIMEOUT, true); // Set heart beat timer to 3 minutes. If HB message is not received during that time, failsafe (turn off heating)
   
   if (serial_link.ReceiveKVPair(kv)) {
-    LOG("Data prijata z cloudu"); 
+    LOG("Data prijata"); 
     
     if (strcmp(kv.key, "TT1") == 0) {
       settings_menu.value_set(SETROOM1TEMP, kv.value);
@@ -371,7 +379,19 @@ void receive_data() {
       settings_menu.value_set(SETANTIFREEZE, afv);
       save2EEPROM = true;
     }
-    
+    else if (strcmp(kv.key, "HR") == 0) {         // Heat Request from HA. 
+      int hrv = (kv.value == 0) ? OFF : ON;       // When El. Heater uses Thermostatic valves, Arduino thermostat is overridden by HA commands.
+      settings_menu.value_set(SETELHEATER, hrv);
+    }
+    else if (strcmp(kv.key, "HB") == 0) {         // Heart Beat from HA. If it does not come regularly
+      if (kv.value == 1)
+        hb_timer.start_timer();                      // Everytime I get HB message, I restart the timer. 
+    }
+
+    if (hb_timer.expired()) {
+      settings_menu.value_set(SETELHEATER, AUTO);  // in case of lost hearbeat from HA, fail safe => back to AUTO mode. 
+    }
+
     if (save2EEPROM) {
         WriteEEPROM();
         LOG("Saving new settings from cloud to EEPROM"); 
@@ -398,16 +418,16 @@ void loop() {
 // Heater class is used to provide persistence that allows delays between switch on and off. 
 class MyHeater {
   private:
-    MyTimer T; // can't be turned on earlier than X mins after turn off.
+    MyTimer T1; // can't be turned on earlier than X mins after turn off.
     bool off;
 
   public:
-    MyHeater() : T(DEFAULT_HONOFFTIME) {
+    MyHeater() : T1(DEFAULT_HONOFFTIME) {
       off = true;
     }
 
     void heater_on() {
-      if (T.expired()) { 
+      if (T1.expired()) { 
         digitalWrite(pin_H, LOW);
         main_menu.value_set(ACTELHEATERON, ON);  
         off = false;      
@@ -418,7 +438,7 @@ class MyHeater {
       if (!off) {
         digitalWrite(pin_H, HIGH);
         main_menu.value_set(ACTELHEATERON, OFF);
-        T.start_timer();
+        T1.start_timer();
         off = true;
        }
     }
@@ -615,6 +635,7 @@ void control_system() {
   }
   switch (settings_menu.value_get(SETELHEATER)) {
     case ON:
+    // TBD Tady pridat timeout, aby topeni nebylo zapnute prilis dlouho zbytecne nebo check HeartBeat. Kdyz ztratim spojeni, topeni vypnu. 
       HT.heater_on();
       break;      
     case OFF:
@@ -625,9 +646,9 @@ void control_system() {
       if (t != ERROR) {
         if (t >= settings_menu.value_get(master_temp) + hystereze ||
             main_menu.value_get(ACTWATEROUTTEMP) >= settings_menu.value_get(SETMAXWATEROUTHEATER))
-        HT.heater_off();
-      else if (t < settings_menu.value_get(master_temp) - hystereze)
-        HT.heater_on();          
+          HT.heater_off();
+        else if (t < settings_menu.value_get(master_temp) - hystereze)
+          HT.heater_on();          
       }     
       else
         HT.heater_off(); // if sensors do not work, fail back and turn off the electric heater

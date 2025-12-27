@@ -31,7 +31,7 @@ TODO
 #include "Menu.h"
 #include "MySerial.h"
 
-#define VERSION 6 //  increasing the version number will force the replacement of EEPROM content by the defaults. Do it when changing the configuration set.
+#define VERSION 7 //  increasing the version number will force the replacement of EEPROM content by the defaults. Do it when changing the configuration set.
 #define VPOSITION 512 // position in EEPROM to store version number. Must be higher then SETTINGSMENUSIZE 
 //#define SENSORDEBUG // uncomment for debugging without the use of sensors. The values are then set in main menu using the keyboard
 //#define LOGGING // turn on logging messages on Serial 
@@ -162,14 +162,15 @@ const int pin_H = 19;   // Heater pin relay
 const int DEFAULT_HONOFFTIME = 10000;   // test 10 sec. only
 const int DEFAULT_WPONOFFTIME = 10000;  // test 10 sec. only
 #else
-const unsigned long DEFAULT_HONOFFTIME = 600000;    // Heater can't be turned on earlier than 10 mins after last turn off.
-const unsigned long DEFAULT_WPONOFFTIME = 1200000;  // Once the pump is turned on it will run for at least 20 minutes. 
+const unsigned long DEFAULT_HONOFFTIME = 60000;    // Heater can't be turned on earlier than 10 mins after last turn off.
+const unsigned long DEFAULT_WPONOFFTIME = 600000;  // Once the pump is turned on it will run for at least 10 minutes. 
 #endif
 
 const int DEFAULT_WTPUMP = 3000;      // When water temp is higher than 30 degrees, the water pump turns on
 const int BACKGLIGHTTIME = 20000;     // Turn off display backlight after 20s.
 const unsigned long DATASENDPERIOD = 60000;      // The data will be send to serial port every 60 seconds. 
 const int HBTIMEOUT = 180000;         // Time out for hear beat messages from HA. 
+const int HTONTIMEOUT = 7200000;       // Time out for Heater ON state. After 2 hours it switches back to AUTO state, until someone calls for ON state again. 
 
 // Setup a oneWire instance to communicate with any OneWire devices
 OneWire oneWire(pin_WTS);
@@ -186,31 +187,25 @@ MyMenu settings_menu(SETTINGSMENUSIZE, SETTINGSMENU, SMENTRIES_TABLE, SETTINGSME
 MySerial serial_link(9600); // Initialize the serial class for sending and receiving the key value pairs
 
 // Timer class is used to implement delays in some operations. 
+// When initiated it is always in Expired state. 
 class MyTimer {
   private:
-    unsigned long start_time;
+    unsigned long start_time = 0;
     unsigned long duration;
-    bool running;
-
+    
   public:
-    MyTimer(unsigned long d, bool start = false) {
-      duration = d;
-      if (start) {
-        start_timer();
-      } else
-        running = false;
+    MyTimer(unsigned long d) : duration(d) {}
+      
+    bool expired() {
+      // never started → expired
+      if (start_time == 0)
+        return true;
+      
+      return (unsigned long)(millis() - start_time) >= duration;
     }
 
-    bool expired() {
-      if (millis() - start_time > duration) {
-        running = false;
-        return true;
-      } else
-        return !running;
-    }
     void start_timer() {
       start_time = millis();
-      running = true;
     }
 };
 
@@ -293,7 +288,7 @@ void read_sensors(bool immediate = false) {
 // Send data from sensors to Serial where WiFi module picks it up and sends to the Arduino cloud
 // Sending it every DATASENDPERIOD seconds
 void send_data(bool force = false) {
-  static MyTimer T2(DATASENDPERIOD, true); // timer used to send data via serial every X seconds
+  static MyTimer T2(DATASENDPERIOD); // timer used to send data via serial every X seconds
 
   if (T2.expired() || force)
   {
@@ -346,7 +341,7 @@ void setup() {
 }
 
 void backlight(int key) {
-  static MyTimer T(BACKGLIGHTTIME, true); // timer to control display backlight. It turns off after BACKGLIGHTTIME seconds. 
+  static MyTimer T(BACKGLIGHTTIME); // timer to control display backlight. It turns off after BACKGLIGHTTIME seconds. 
   
   if (key != NONE) {
     pinMode(pin_BL, INPUT);
@@ -361,8 +356,12 @@ void backlight(int key) {
 void receive_data() {
   keyvalue_pair_t kv;
   bool save2EEPROM = false;
-  static MyTimer hb_timer(HBTIMEOUT, true); // Set heart beat timer to 3 minutes. If HB message is not received during that time, failsafe (turn off heating)
+  static MyTimer hb_timer(HBTIMEOUT); // Set heart beat timer to 3 minutes. If HB message is not received during that time, failsafe (turn off heating)
   
+  if (hb_timer.expired()) {
+      settings_menu.value_set(SETELHEATER, AUTO);  // in case of lost hearbeat from HA, fail safe => back to AUTO mode. 
+    }
+
   if (serial_link.ReceiveKVPair(kv)) {
     LOG("Data prijata"); 
     
@@ -383,13 +382,9 @@ void receive_data() {
       int hrv = (kv.value == 0) ? OFF : ON;       // When El. Heater uses Thermostatic valves, Arduino thermostat is overridden by HA commands.
       settings_menu.value_set(SETELHEATER, hrv);
     }
-    else if (strcmp(kv.key, "HB") == 0) {         // Heart Beat from HA. If it does not come regularly
+    else if (strcmp(kv.key, "HB") == 0) {         // Heart Beat from HA. If it does not come regularly heart beat time should expire. 
       if (kv.value == 1)
         hb_timer.start_timer();                      // Everytime I get HB message, I restart the timer. 
-    }
-
-    if (hb_timer.expired()) {
-      settings_menu.value_set(SETELHEATER, AUTO);  // in case of lost hearbeat from HA, fail safe => back to AUTO mode. 
     }
 
     if (save2EEPROM) {
@@ -418,16 +413,16 @@ void loop() {
 // Heater class is used to provide persistence that allows delays between switch on and off. 
 class MyHeater {
   private:
-    MyTimer T1; // can't be turned on earlier than X mins after turn off.
+    MyTimer offTimer; // can't be turned on earlier than X mins after turn off.
     bool off;
 
   public:
-    MyHeater() : T1(DEFAULT_HONOFFTIME) {
+    MyHeater() : offTimer(DEFAULT_HONOFFTIME){
       off = true;
     }
 
     void heater_on() {
-      if (T1.expired()) { 
+      if (offTimer.expired()) { 
         digitalWrite(pin_H, LOW);
         main_menu.value_set(ACTELHEATERON, ON);  
         off = false;      
@@ -438,7 +433,7 @@ class MyHeater {
       if (!off) {
         digitalWrite(pin_H, HIGH);
         main_menu.value_set(ACTELHEATERON, OFF);
-        T1.start_timer();
+        offTimer.start_timer();
         off = true;
        }
     }
@@ -613,6 +608,9 @@ void run_menu(int key) {
 void control_system() {
   static MyHeater HT;
   static MyPump P;
+  static MyTimer timer_heaterON(HTONTIMEOUT);
+  static bool setON = false;
+  
   int hystereze = settings_menu.value_get(SETHYSTER);  //  up and down difference. TBD Mozna by melo byt ve stupnich, nikoliv procentech.
   int t; 
 
@@ -633,10 +631,18 @@ void control_system() {
     master_sensor = ACTROOM2TEMP;
     master_temp = SETROOM2TEMP;
   }
+  
   switch (settings_menu.value_get(SETELHEATER)) {
     case ON:
-    // TBD Tady pridat timeout, aby topeni nebylo zapnute prilis dlouho zbytecne nebo check HeartBeat. Kdyz ztratim spojeni, topeni vypnu. 
-      HT.heater_on();
+      if (!setON) {     // Heater can not be ON longer then a given period HTONTIMEOUT. After that it will be forced to AUTO setting. 
+        HT.heater_on();
+        timer_heaterON.start_timer();
+        setON = true; 
+      }
+      else if (timer_heaterON.expired()) {
+        settings_menu.value_set(SETELHEATER, AUTO);
+        setON = false;
+      }
       break;      
     case OFF:
       HT.heater_off();

@@ -48,12 +48,12 @@ TODO
 #endif
 
 
-enum menu_type {
+enum class Menu_Type : uint8_t {
   MAIN_MENU,
   SETTINGS_MENU
 };
 
-enum MainMenuItem {
+enum  Main_Menu_Item { // TBD zmenit na class enum, odstranit MAINMENUSIZE a prepsat Menu.cpp class
   ACTROOM1TEMP = 0,   // Measured temperature in Room 1
   ACTROOM1HUM,        // Measured humidity in Room 1
   ACTROOM2TEMP,       // Measured temperature in Room 2
@@ -159,18 +159,18 @@ const int pin_H = 19;   // Heater pin relay
 
 // Default values for the conrol functions
 #ifdef SENSORDEBUG
-const int DEFAULT_HONOFFTIME = 10000;   // test 10 sec. only
-const int DEFAULT_WPONOFFTIME = 10000;  // test 10 sec. only
+const unsigned long DEFAULT_HONOFFTIME = 10000;   // test 10 sec. only
+const unsigned long DEFAULT_WPONOFFTIME = 10000;  // test 10 sec. only
 #else
-const unsigned long DEFAULT_HONOFFTIME = 60000;    // Heater can't be turned on earlier than 10 mins after last turn off.
+const unsigned long DEFAULT_HONOFFTIME = 60000;    // Heater can't be turned on earlier than 1 mins after last turn off.
 const unsigned long DEFAULT_WPONOFFTIME = 600000;  // Once the pump is turned on it will run for at least 10 minutes. 
 #endif
 
-const int DEFAULT_WTPUMP = 3000;      // When water temp is higher than 30 degrees, the water pump turns on
-const int BACKGLIGHTTIME = 20000;     // Turn off display backlight after 20s.
+const int DEFAULT_WTPUMP = 4000;      // When water temp is higher than 40 degrees, the water pump turns on
+const unsigned long BACKGLIGHTTIME = 20000;     // Turn off display backlight after 20s.
 const unsigned long DATASENDPERIOD = 60000;      // The data will be send to serial port every 60 seconds. 
-const int HBTIMEOUT = 180000;         // Time out for hear beat messages from HA. 
-const int HTONTIMEOUT = 7200000;       // Time out for Heater ON state. After 2 hours it switches back to AUTO state, until someone calls for ON state again. 
+const unsigned long HBTIMEOUT = 180000;         // Time out for heartbeat messages from HA. 
+//const unsigned long HTONTIMEOUT = 7200000;       // Time out for Heater ON state. After 2 hours it switches back to AUTO state, until someone calls for ON state again. 
 
 // Setup a oneWire instance to communicate with any OneWire devices
 OneWire oneWire(pin_WTS);
@@ -187,25 +187,30 @@ MyMenu settings_menu(SETTINGSMENUSIZE, SETTINGSMENU, SMENTRIES_TABLE, SETTINGSME
 MySerial serial_link(9600); // Initialize the serial class for sending and receiving the key value pairs
 
 // Timer class is used to implement delays in some operations. 
-// When initiated it is always in Expired state. 
+// When initiated it is always in not started state = expired. 
 class MyTimer {
   private:
     unsigned long start_time = 0;
     unsigned long duration;
+    bool t_runs = false;
     
   public:
     MyTimer(unsigned long d) : duration(d) {}
-      
-    bool expired() {
-      // never started → expired
-      if (start_time == 0)
-        return true;
-      
-      return (unsigned long)(millis() - start_time) >= duration;
-    }
 
     void start_timer() {
       start_time = millis();
+      t_runs = true;
+    }
+
+    bool expired() {
+      if (!t_runs)
+        return true;
+    
+      if ((unsigned long)(millis() - start_time) >= duration) { // if it expires, turn the t_runs flag back to false as the timer no longer runs. 
+        t_runs = false;
+        return true;
+      }
+      else return false;
     }
 };
 
@@ -292,12 +297,15 @@ void send_data(bool force = false) {
 
   if (T2.expired() || force)
   {
-    serial_link.SendKVPair({"T1", main_menu.value_get(ACTROOM1TEMP)});
-    serial_link.SendKVPair({"T2", main_menu.value_get(ACTROOM2TEMP)});
-    serial_link.SendKVPair({"H1", main_menu.value_get(ACTROOM1HUM)});
-    serial_link.SendKVPair({"H2", main_menu.value_get(ACTROOM2HUM)});
-    serial_link.SendKVPair({"WT1", main_menu.value_get(ACTWATEROUTTEMP)});
-    serial_link.SendKVPair({"WT2", main_menu.value_get(ACTWATERINTEMP)});
+    serial_link.SendKVPair({"T1", main_menu.value_get(ACTROOM1TEMP)});    // Temperature of 1st thermometer
+    serial_link.SendKVPair({"T2", main_menu.value_get(ACTROOM2TEMP)});    // Temperature of 2nd thermometer
+    serial_link.SendKVPair({"H1", main_menu.value_get(ACTROOM1HUM)});     // Humidity of 1st
+    serial_link.SendKVPair({"H2", main_menu.value_get(ACTROOM2HUM)});     // Humidity of 2nd
+    serial_link.SendKVPair({"WT1", main_menu.value_get(ACTWATEROUTTEMP)});  // Water temp of 1st 
+    serial_link.SendKVPair({"WT2", main_menu.value_get(ACTWATERINTEMP)});   // Water temp of 2nd
+    serial_link.SendKVPair({"PMP", main_menu.value_get(ACTPUMPON)-OFF});        // State of the pump  
+    serial_link.SendKVPair({"HTR", main_menu.value_get(ACTELHEATERON)-OFF});    // State of the heater
+
     Serial.println("");
     if (force)
     {
@@ -534,9 +542,9 @@ void display_2lines(String Line1, String Line2) {
 }
 
 void run_menu(int key) {
-  static bool menu_type = MAIN_MENU;
+  static Menu_Type menu_type = Menu_Type::MAIN_MENU;
   
-  if (menu_type == MAIN_MENU) {
+  if (menu_type == Menu_Type::MAIN_MENU) {
     display_2lines(main_menu.text_get(), main_menu.value_getastext());
   #ifdef SENSORDEBUG
   switch (key) {
@@ -556,7 +564,7 @@ void run_menu(int key) {
       break;  
     case SELECT:
       if (main_menu.last()) {
-        menu_type = SETTINGS_MENU;
+        menu_type = Menu_Type::SETTINGS_MENU;
         main_menu.beginning();
       }
     }
@@ -566,11 +574,11 @@ void run_menu(int key) {
     else if (key == UP || key == LEFT)
       main_menu.prev();
     else if (key == SELECT && main_menu.last()) { // selecting last mainu menu item means moving to configuration menu
-      menu_type = SETTINGS_MENU;
+      menu_type = Menu_Type::SETTINGS_MENU;
       main_menu.beginning();
     }
   #endif
-  } else if (menu_type == SETTINGS_MENU) {
+  } else if (menu_type == Menu_Type::SETTINGS_MENU) {
     display_2lines(settings_menu.text_get(), settings_menu.value_getastext());
     switch (key) {
       case DOWN:
@@ -589,7 +597,7 @@ void run_menu(int key) {
         break;  
       case SELECT:
         if (settings_menu.last()) {
-          menu_type = MAIN_MENU;
+          menu_type = Menu_Type::MAIN_MENU;
           settings_menu.beginning();
           // save into permanent storage
           WriteEEPROM();
@@ -608,7 +616,7 @@ void run_menu(int key) {
 void control_system() {
   static MyHeater HT;
   static MyPump P;
-  static MyTimer timer_heaterON(HTONTIMEOUT);
+  //static MyTimer timer_heaterON(HTONTIMEOUT);
   static bool setON = false;
   
   int hystereze = settings_menu.value_get(SETHYSTER);  //  up and down difference. TBD Mozna by melo byt ve stupnich, nikoliv procentech.
@@ -625,8 +633,8 @@ void control_system() {
   
   // Electric Heater ON, OFF, or AUTO. If Auto then thermostat is on, i.e. Room temp to match preset temp.
   // Master sensor is either ROOM #1 or ROOM #2 (with plumbing that must not freeze). Depending on master, either preset #1 or #2 is used as required temperature. 
-  int master_sensor = ACTROOM1TEMP;
-  int master_temp = SETROOM1TEMP;
+  Main_Menu_Item master_sensor = ACTROOM1TEMP;
+  SettingMenuItem master_temp = SETROOM1TEMP;
   if (settings_menu.value_get(SETANTIFREEZE) == ON) {
     master_sensor = ACTROOM2TEMP;
     master_temp = SETROOM2TEMP;
@@ -634,15 +642,15 @@ void control_system() {
   
   switch (settings_menu.value_get(SETELHEATER)) {
     case ON:
-      if (!setON) {     // Heater can not be ON longer then a given period HTONTIMEOUT. After that it will be forced to AUTO setting. 
-        HT.heater_on();
-        timer_heaterON.start_timer();
-        setON = true; 
-      }
-      else if (timer_heaterON.expired()) {
-        settings_menu.value_set(SETELHEATER, AUTO);
-        setON = false;
-      }
+    //  if (!setON) {     // Heater can not be ON longer then a given period HTONTIMEOUT. After that it will be forced to AUTO setting. 
+      HT.heater_on();
+    //    timer_heaterON.start_timer();
+    //    setON = true; 
+    //  }
+    //  else if (timer_heaterON.expired()) {
+    //    settings_menu.value_set(SETELHEATER, AUTO);
+    //    setON = false;
+    //  }
       break;      
     case OFF:
       HT.heater_off();
